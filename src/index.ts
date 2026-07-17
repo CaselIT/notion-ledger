@@ -8,7 +8,11 @@ import {
   resolveOutputDirectory,
 } from "./inputs";
 import { discoverPages } from "./notion";
-import { convertPage, renderPage } from "./render";
+import {
+  configureInlineDatabaseRenderer,
+  convertPage,
+  renderPage,
+} from "./render";
 import { reconcileMirror } from "./state";
 
 export async function run(): Promise<void> {
@@ -36,6 +40,7 @@ export async function run(): Promise<void> {
     notionClient: notion,
     config: { parseChildPages: false },
   });
+  configureInlineDatabaseRenderer(n2m, notion);
 
   core.info("Discovering pages below the configured Notion root.");
   const pages = await discoverPages(notion, rootPageId, {

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { APIErrorCode, APIResponseError } from "@notionhq/client";
-import { discoverPages, findChildPageIds } from "../src/notion";
+import {
+  discoverPages,
+  findChildPageIds,
+  queryInlineDatabaseRows,
+} from "../src/notion";
 
 const rootId = "11111111111111111111111111111111";
 const childId = "22222222222222222222222222222222";
@@ -44,6 +48,12 @@ function createNotionMock(): Parameters<typeof discoverPages>[0] & {
     userRetrievals: () => userRetrievals,
     pages: {
       retrieve: async ({ page_id: pageId }: { page_id: string }) => pages[pageId],
+    },
+    databases: {
+      retrieve: async () => ({ object: "database", data_sources: [] }),
+    },
+    dataSources: {
+      query: async () => ({ results: [], has_more: false, next_cursor: null }),
     },
     users: {
       retrieve: async ({ user_id: userId }: { user_id: string }) => {
@@ -103,6 +113,29 @@ function restrictedUserInformationError(): APIResponseError {
 
 test("finds child pages inside nested blocks and across pagination", async () => {
   assert.deepEqual(await findChildPageIds(createNotionMock(), rootId), [childId]);
+});
+
+test("queries all pages in an inline database", async () => {
+  const cursors: Array<string | undefined> = [];
+  const rows = await queryInlineDatabaseRows({
+    databases: {
+      retrieve: async () => ({
+        object: "database",
+        data_sources: [{ id: "data-source-id", name: "Tasks" }],
+      }),
+    },
+    dataSources: {
+      query: async ({ start_cursor: cursor }) => {
+        cursors.push(cursor);
+        return cursor
+          ? { results: [{ id: "second" }], has_more: false, next_cursor: null }
+          : { results: [{ id: "first" }], has_more: true, next_cursor: "next" };
+      },
+    },
+  }, "database-id");
+
+  assert.deepEqual(rows, [{ id: "first" }, { id: "second" }]);
+  assert.deepEqual(cursors, [undefined, "next"]);
 });
 
 test("discovers root and descendant metadata", async () => {

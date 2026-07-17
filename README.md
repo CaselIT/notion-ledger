@@ -105,7 +105,7 @@ Known Milestone 1 limitations:
 
 - Notion formatting is not losslessly reversible. Callouts and tables use Markdown/HTML approximations, toggles use HTML details blocks, and columns are flattened into reading order.
 - Child pages are deliberately excluded from a parent's Markdown body and exported as their own indexed files.
-- Database views and database rows are not traversed or reproduced. Unsupported blocks may be omitted by the converter.
+- Inline database rows are rendered in place as a readable list. Checkbox properties and standard task statuses (`Done`, `Complete`, or `Completed`) become GFM task markers, and date properties are included as item details; views, filters, sorts, and other database properties are not reproduced.
 - Images and file attachments retain their source URLs. Notion-hosted URLs may expire, so the current mirror is not a durable attachment archive.
 - API pagination is handled for block traversal, but retries and explicit rate-limit backoff rely on the official SDK behavior in this release.
 

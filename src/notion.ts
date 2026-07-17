@@ -32,6 +32,20 @@ export interface NotionClient {
   pages: {
     retrieve: (parameters: { page_id: string }) => Promise<unknown>;
   };
+  databases: {
+    retrieve: (parameters: { database_id: string }) => Promise<unknown>;
+  };
+  dataSources: {
+    query: (parameters: {
+      data_source_id: string;
+      page_size: number;
+      start_cursor?: string;
+    }) => Promise<{
+      results: unknown[];
+      has_more: boolean;
+      next_cursor: string | null;
+    }>;
+  };
   users: {
     retrieve: (parameters: { user_id: string }) => Promise<unknown>;
   };
@@ -88,6 +102,40 @@ export async function findChildPageIds(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getDataSourceId(database: unknown): string {
+  if (!isRecord(database) || !Array.isArray(database.data_sources)) {
+    throw new Error("Notion returned invalid inline database metadata.");
+  }
+  const dataSource = database.data_sources.find(
+    (candidate) => isRecord(candidate) && typeof candidate.id === "string",
+  );
+  if (!dataSource || typeof dataSource.id !== "string") {
+    throw new Error("The inline Notion database has no queryable data source.");
+  }
+  return dataSource.id;
+}
+
+export async function queryInlineDatabaseRows(
+  notion: Pick<NotionClient, "databases" | "dataSources">,
+  databaseId: string,
+): Promise<unknown[]> {
+  const database = await notion.databases.retrieve({ database_id: databaseId });
+  const dataSourceId = getDataSourceId(database);
+  const rows: unknown[] = [];
+  let cursor: string | undefined;
+  do {
+    const response = await notion.dataSources.query({
+      data_source_id: dataSourceId,
+      page_size: 100,
+      ...(cursor ? { start_cursor: cursor } : {}),
+    });
+    rows.push(...response.results);
+    cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+  } while (cursor);
+
+  return rows;
 }
 
 function requirePageResponse(value: unknown): PageResponse {

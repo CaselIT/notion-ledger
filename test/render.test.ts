@@ -3,7 +3,12 @@ import test from "node:test";
 import type { Client } from "@notionhq/client";
 import { NotionToMarkdown } from "notion-to-md";
 import { parse } from "yaml";
-import { convertPage, GENERATED_MARKER, renderPage } from "../src/render";
+import {
+  configureInlineDatabaseRenderer,
+  convertPage,
+  GENERATED_MARKER,
+  renderPage,
+} from "../src/render";
 
 const page = {
   id: "8fe4a1b2123434567890abcdefabcdef",
@@ -83,5 +88,69 @@ test("converts nested Notion to-dos to GFM task lists", async () => {
   assert.equal(
     await convertPage(n2m, page.id),
     "- [ ] Review pricing assumptions\n    - [x] Check retailer data\n",
+  );
+});
+
+test("renders inline database rows as Markdown tasks", async () => {
+  const notion = {
+    blocks: {
+      children: {
+        list: async () => ({
+          object: "list",
+          type: "block",
+          block: {},
+          has_more: false,
+          next_cursor: null,
+          results: [{
+            id: "database-id",
+            type: "child_database",
+            child_database: { title: "Todo List" },
+          }],
+        }),
+      },
+    },
+    databases: {
+      retrieve: async () => ({
+        object: "database",
+        data_sources: [{ id: "data-source-id", name: "Todo List" }],
+      }),
+    },
+    dataSources: {
+      query: async () => ({
+        results: [
+          {
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Buy milk" }] },
+              Done: { type: "checkbox", checkbox: true },
+              Due: { type: "date", date: { start: "2026-07-20" } },
+            },
+          },
+          {
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Book dentist" }] },
+              Status: { type: "status", status: { name: "Not started" } },
+            },
+          },
+          {
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Send invoice" }] },
+              Status: { type: "status", status: { name: "Done" } },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      }),
+    },
+  };
+  const n2m = new NotionToMarkdown({
+    notionClient: notion as unknown as Client,
+    config: { parseChildPages: false },
+  });
+  configureInlineDatabaseRenderer(n2m, notion);
+
+  assert.equal(
+    await convertPage(n2m, page.id),
+    "\n## Todo List\n- [x] Buy milk (Due: 2026-07-20)\n- [ ] Book dentist\n- [x] Send invoice\n\n",
   );
 });
