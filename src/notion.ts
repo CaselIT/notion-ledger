@@ -1,3 +1,4 @@
+import { APIErrorCode, APIResponseError } from "@notionhq/client";
 import { normalizePageId } from "./inputs";
 
 interface BlockResponse {
@@ -31,6 +32,9 @@ export interface NotionClient {
   pages: {
     retrieve: (parameters: { page_id: string }) => Promise<unknown>;
   };
+  users: {
+    retrieve: (parameters: { user_id: string }) => Promise<unknown>;
+  };
 }
 
 export interface PageMetadata {
@@ -39,6 +43,10 @@ export interface PageMetadata {
   title: string;
   lastEditedAt: string;
   lastEditedBy?: string;
+}
+
+export interface DiscoverPagesOptions {
+  onUserInfoUnavailable?: () => void;
 }
 
 export async function listAllChildren(
@@ -124,12 +132,32 @@ export function toPageMetadata(value: unknown): PageMetadata {
   };
 }
 
+function getLastEditedById(value: unknown): string | undefined {
+  const page = requirePageResponse(value);
+  return isRecord(page.last_edited_by) && typeof page.last_edited_by.id === "string"
+    ? page.last_edited_by.id
+    : undefined;
+}
+
+async function retrieveUserName(
+  notion: NotionClient,
+  userId: string,
+): Promise<string | undefined> {
+  const user = await notion.users.retrieve({ user_id: userId });
+  return isRecord(user) && typeof user.name === "string"
+    ? user.name || undefined
+    : undefined;
+}
+
 export async function discoverPages(
   notion: NotionClient,
   rootPageId: string,
+  { onUserInfoUnavailable }: DiscoverPagesOptions = {},
 ): Promise<PageMetadata[]> {
   const pages: PageMetadata[] = [];
   const visited = new Set();
+  const userNames = new Map<string, Promise<string | undefined>>();
+  let userInfoAvailable = true;
 
   async function visit(pageId: string): Promise<void> {
     const normalizedId = normalizePageId(pageId);
@@ -139,7 +167,27 @@ export async function discoverPages(
     visited.add(normalizedId);
 
     const page = await notion.pages.retrieve({ page_id: normalizedId });
-    pages.push(toPageMetadata(page));
+    const metadata = toPageMetadata(page);
+    const lastEditedById = getLastEditedById(page);
+    if (!metadata.lastEditedBy && lastEditedById && userInfoAvailable) {
+      const name = userNames.get(lastEditedById) ?? retrieveUserName(
+        notion,
+        lastEditedById,
+      ).catch((error: unknown) => {
+        if (
+          APIResponseError.isAPIResponseError(error)
+          && error.code === APIErrorCode.RestrictedResource
+        ) {
+          userInfoAvailable = false;
+          onUserInfoUnavailable?.();
+          return undefined;
+        }
+        throw error;
+      });
+      userNames.set(lastEditedById, name);
+      metadata.lastEditedBy = await name;
+    }
+    pages.push(metadata);
 
     const childIds = await findChildPageIds(notion, normalizedId);
     for (const childId of childIds) {

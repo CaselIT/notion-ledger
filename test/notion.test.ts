@@ -1,19 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { APIErrorCode, APIResponseError } from "@notionhq/client";
 import { discoverPages, findChildPageIds } from "../src/notion";
 
 const rootId = "11111111111111111111111111111111";
 const childId = "22222222222222222222222222222222";
 const nestedBlockId = "33333333-3333-3333-3333-333333333333";
 
-function createNotionMock(): Parameters<typeof discoverPages>[0] {
+function createNotionMock(): Parameters<typeof discoverPages>[0] & {
+  userRetrievals: () => number;
+} {
+  let userRetrievals = 0;
   const pages: Record<string, unknown> = {
     [rootId]: {
       object: "page",
       id: rootId,
       url: `https://notion.so/${rootId}`,
       last_edited_time: "2026-07-17T09:30:00.000Z",
-      last_edited_by: { object: "user", id: "editor", name: "Editor" },
+      last_edited_by: { object: "user", id: "editor" },
       properties: {
         Name: {
           type: "title",
@@ -37,8 +41,15 @@ function createNotionMock(): Parameters<typeof discoverPages>[0] {
   };
 
   const mock = {
+    userRetrievals: () => userRetrievals,
     pages: {
       retrieve: async ({ page_id: pageId }: { page_id: string }) => pages[pageId],
+    },
+    users: {
+      retrieve: async ({ user_id: userId }: { user_id: string }) => {
+        userRetrievals += 1;
+        return { object: "user", id: userId, name: "Editor" };
+      },
     },
     blocks: {
       children: {
@@ -78,12 +89,25 @@ function createNotionMock(): Parameters<typeof discoverPages>[0] {
   return mock;
 }
 
+function restrictedUserInformationError(): APIResponseError {
+  return new APIResponseError({
+    code: APIErrorCode.RestrictedResource,
+    status: 403,
+    message: "Insufficient permissions for this endpoint.",
+    headers: new Headers(),
+    rawBodyText: "",
+    additional_data: undefined,
+    request_id: undefined,
+  });
+}
+
 test("finds child pages inside nested blocks and across pagination", async () => {
   assert.deepEqual(await findChildPageIds(createNotionMock(), rootId), [childId]);
 });
 
 test("discovers root and descendant metadata", async () => {
-  const pages = await discoverPages(createNotionMock(), rootId);
+  const notion = createNotionMock();
+  const pages = await discoverPages(notion, rootId);
   assert.deepEqual(
     pages.map(({ id, title }) => ({ id, title })),
     [
@@ -92,5 +116,27 @@ test("discovers root and descendant metadata", async () => {
     ],
   );
   assert.equal(pages[0].lastEditedBy, "Editor");
+  assert.equal(pages[1].lastEditedBy, "Editor");
+  assert.equal(notion.userRetrievals(), 1);
+});
+
+test("omits editor names when user information is unavailable", async () => {
+  const notion = createNotionMock();
+  let userRetrievals = 0;
+  notion.users.retrieve = async () => {
+    userRetrievals += 1;
+    throw restrictedUserInformationError();
+  };
+  let warnings = 0;
+
+  const pages = await discoverPages(notion, rootId, {
+    onUserInfoUnavailable: () => {
+      warnings += 1;
+    },
+  });
+
+  assert.equal(pages[0].lastEditedBy, undefined);
   assert.equal(pages[1].lastEditedBy, undefined);
+  assert.equal(warnings, 1);
+  assert.equal(userRetrievals, 1);
 });

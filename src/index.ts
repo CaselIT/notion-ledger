@@ -38,7 +38,12 @@ export async function run(): Promise<void> {
   });
 
   core.info("Discovering pages below the configured Notion root.");
-  const pages = await discoverPages(notion, rootPageId);
+  const pages = await discoverPages(notion, rootPageId, {
+    onUserInfoUnavailable: () => core.warning(
+      "Skipping last_edited_by because the Notion integration does not have "
+      + "User information without email addresses capability.",
+    ),
+  });
   const renderedPages = [];
   for (const page of pages) {
     core.info(`Rendering "${page.title}" (${page.id}).`);
@@ -64,14 +69,16 @@ export async function run(): Promise<void> {
     `Exported ${result.pagesExported} page(s); `
     + `changed ${result.pagesChanged}; deleted ${result.pagesDeleted}.`,
   );
-  await core.summary
-    .addHeading("Notion mirror")
-    .addTable([
-      [{ data: "Pages exported", header: true }, String(result.pagesExported)],
-      [{ data: "Pages changed", header: true }, String(result.pagesChanged)],
-      [{ data: "Pages deleted", header: true }, String(result.pagesDeleted)],
-    ])
-    .write();
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    await core.summary
+      .addHeading("Notion mirror")
+      .addTable([
+        [{ data: "Pages exported", header: true }, String(result.pagesExported)],
+        [{ data: "Pages changed", header: true }, String(result.pagesChanged)],
+        [{ data: "Pages deleted", header: true }, String(result.pagesDeleted)],
+      ])
+      .write();
+  }
 }
 
 run().catch((error: unknown) => {

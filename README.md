@@ -121,3 +121,33 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+### Local Mirror
+
+`npm run mirror:local` performs a live export against Notion. It uses the same Action input environment variables as GitHub Actions, so keep the token in an existing local environment variable and use a separate output directory while testing.
+
+On windows in powershell:
+```powershell
+[Environment]::SetEnvironmentVariable('INPUT_NOTION-TOKEN', $env:NOTION_TOKEN, 'Process')
+[Environment]::SetEnvironmentVariable('INPUT_ROOT-PAGE', $env:NOTION_MIRROR_ROOT_PAGE, 'Process')
+[Environment]::SetEnvironmentVariable('INPUT_OUTPUT-DIR', 'docs/notion-local-test', 'Process')
+[Environment]::SetEnvironmentVariable('INPUT_ADD-FRONTMATTER', 'true', 'Process')
+[Environment]::SetEnvironmentVariable('INPUT_DELETE-ORPHANS', 'false', 'Process')
+$env:GITHUB_WORKSPACE = (Get-Location).Path
+
+npm run mirror:local
+```
+
+On a bash-like shell:
+```sh
+export INPUT_NOTION-TOKEN="$NOTION_TOKEN"
+export INPUT_ROOT-PAGE="$NOTION_MIRROR_ROOT_PAGE"
+export INPUT_OUTPUT-DIR='docs/notion-local-test'
+export INPUT_ADD-FRONTMATTER='true'
+export INPUT_DELETE-ORPHANS='false'
+export GITHUB_WORKSPACE="$PWD"
+
+npm run mirror:local
+```
+
+Set `NOTION_TOKEN` and `NOTION_MIRROR_ROOT_PAGE` in your shell or a local secret manager before running this command. Do not commit either value. After inspecting the generated output and mirror index, enable orphan deletion only when testing in an isolated output directory.
