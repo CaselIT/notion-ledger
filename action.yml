@@ -1,0 +1,43 @@
+name: Notion Ledger
+description: Mirror a selected Notion page tree to stable Markdown files
+author: CaselIT
+
+inputs:
+  notion-token:
+    description: Notion internal integration token
+    required: true
+  root-page:
+    description: Notion root page URL or ID to mirror
+    required: true
+  output-dir:
+    description: Repository-relative directory for generated Markdown
+    required: false
+    default: docs/notion
+  add-frontmatter:
+    description: Add Notion metadata as YAML front matter
+    required: false
+    default: "true"
+  delete-orphans:
+    description: Delete indexed files no longer found below the root
+    required: false
+    default: "true"
+  filename-strategy:
+    description: stable-id, slug-and-id, or title
+    required: false
+    default: slug-and-id
+
+outputs:
+  pages-exported:
+    description: Number of pages found and exported
+  pages-changed:
+    description: Number of Markdown files created or updated
+  pages-deleted:
+    description: Number of orphaned Markdown files deleted
+
+runs:
+  using: node24
+  main: dist/index.cjs
+
+branding:
+  icon: book-open
+  color: gray-dark

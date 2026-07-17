@@ -1,0 +1,32 @@
+{
+  "name": "notion-ledger",
+  "version": "1.0.0",
+  "description": "A versioned Markdown mirror for Notion.",
+  "main": "dist/index.cjs",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.cjs --minify --sourcemap",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "github-action",
+    "notion",
+    "markdown"
+  ],
+  "author": "CaselIT",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@actions/core": "3.0.1",
+    "@notionhq/client": "5.23.2",
+    "notion-to-md": "3.1.9",
+    "slugify": "1.6.9",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.15",
+    "esbuild": "0.25.6",
+    "tsx": "4.20.3",
+    "typescript": "7.0.2"
+  }
+}

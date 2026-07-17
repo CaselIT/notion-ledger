@@ -1,0 +1,44 @@
+name: Validate Action
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@12cd2235efa0937479335606d7c3ac9f6c0973b1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "lts/*"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build Action bundle
+        run: npm run build
+
+      - name: Verify committed bundle is current
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=all -- dist/)" ]; then
+            echo "The committed dist artifacts are stale. Run 'npm run build' and commit the resulting dist changes."
+            git status --short -- dist/
+            exit 1
+          fi
