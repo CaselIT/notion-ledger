@@ -1,5 +1,7 @@
+import path from "node:path";
 import type { NotionToMarkdown } from "notion-to-md";
 import { stringify } from "yaml";
+import { normalizePageId } from "./inputs";
 import { queryInlineDatabaseRows, type NotionClient, type PageMetadata } from "./notion";
 
 export const GENERATED_MARKER =
@@ -55,7 +57,19 @@ function isCompletedStatus(value: unknown): boolean {
     && ["done", "complete", "completed"].includes(value.trim().toLowerCase());
 }
 
-function renderInlineDatabaseRow(row: unknown): string {
+function relativeMarkdownLink(currentPagePath: string, targetPagePath: string): string {
+  const relativePath = path.posix.relative(path.posix.dirname(currentPagePath), targetPagePath);
+  return relativePath
+    .split("/")
+    .map((segment) => segment === ".." ? segment : encodeURIComponent(segment))
+    .join("/");
+}
+
+function renderInlineDatabaseRow(
+  row: unknown,
+  currentPagePath?: string,
+  pagePaths?: Record<string, string>,
+): string {
   if (!isRecord(row) || !isRecord(row.properties)) {
     return "- Untitled";
   }
@@ -79,15 +93,25 @@ function renderInlineDatabaseRow(row: unknown): string {
     }
   }
 
+  const rowId = typeof row.id === "string" ? normalizePageId(row.id) : undefined;
+  const targetPath = rowId ? pagePaths?.[rowId] : undefined;
+  const label = currentPagePath && targetPath
+    ? `[${title.replace(/([\\\[\]])/g, "\\$1")}](${relativeMarkdownLink(
+      currentPagePath,
+      targetPath,
+    )})`
+    : title;
   const suffix = details.length ? ` (${details.join(", ")})` : "";
   return checked === undefined
-    ? `- ${title}${suffix}`
-    : `- [${checked ? "x" : " "}] ${title}${suffix}`;
+    ? `- ${label}${suffix}`
+    : `- [${checked ? "x" : " "}] ${label}${suffix}`;
 }
 
 export function configureInlineDatabaseRenderer(
   n2m: NotionToMarkdown,
   notion: Pick<NotionClient, "databases" | "dataSources">,
+  currentPagePath?: string,
+  pagePaths?: Record<string, string>,
 ): void {
   n2m.setCustomTransformer("child_database", async (block) => {
     if (!("child_database" in block) || !isRecord(block.child_database)) {
@@ -98,7 +122,9 @@ export function configureInlineDatabaseRenderer(
       ? block.child_database.title.trim()
       : "Database";
     const rows = await queryInlineDatabaseRows(notion, block.id);
-    const markdownRows = rows.map(renderInlineDatabaseRow);
+    const markdownRows = rows.map(
+      (row) => renderInlineDatabaseRow(row, currentPagePath, pagePaths),
+    );
     return [`## ${title}`, ...markdownRows].join("\n");
   });
 }
@@ -108,6 +134,9 @@ export async function convertPage(
   pageId: string,
 ): Promise<string> {
   const blocks = await n2m.pageToMarkdown(pageId);
+  if (blocks.length === 0) {
+    return "";
+  }
   const result = n2m.toMarkdownString(blocks);
   if (!result || typeof result.parent !== "string") {
     throw new Error(`Markdown conversion returned no parent content for page ${pageId}.`);

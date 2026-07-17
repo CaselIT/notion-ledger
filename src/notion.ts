@@ -92,6 +92,13 @@ export async function findChildPageIds(
   for (const block of blocks) {
     if ("type" in block && block.type === "child_page") {
       pageIds.push(normalizePageId(block.id));
+    } else if ("type" in block && block.type === "child_database") {
+      const rows = await queryInlineDatabaseRows(notion, block.id);
+      for (const row of rows) {
+        if (isRecord(row) && row.object === "page" && typeof row.id === "string") {
+          pageIds.push(normalizePageId(row.id));
+        }
+      }
     } else if ("has_children" in block && block.has_children) {
       pageIds.push(...await findChildPageIds(notion, block.id));
     }

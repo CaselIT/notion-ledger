@@ -91,7 +91,33 @@ test("converts nested Notion to-dos to GFM task lists", async () => {
   );
 });
 
+test("converts an empty Notion page to an empty body", async () => {
+  const notionClient = {
+    blocks: {
+      children: {
+        list: async () => ({
+          object: "list",
+          type: "block",
+          block: {},
+          has_more: false,
+          next_cursor: null,
+          results: [],
+        }),
+      },
+    },
+  } as unknown as Client;
+  const n2m = new NotionToMarkdown({
+    notionClient,
+    config: { parseChildPages: false },
+  });
+
+  assert.equal(await convertPage(n2m, page.id), "");
+});
+
 test("renders inline database rows as Markdown tasks", async () => {
+  const firstRowId = "11111111-1111-1111-1111-111111111111";
+  const secondRowId = "22222222-2222-2222-2222-222222222222";
+  const thirdRowId = "33333333-3333-3333-3333-333333333333";
   const notion = {
     blocks: {
       children: {
@@ -119,6 +145,7 @@ test("renders inline database rows as Markdown tasks", async () => {
       query: async () => ({
         results: [
           {
+            id: firstRowId,
             properties: {
               Name: { type: "title", title: [{ plain_text: "Buy milk" }] },
               Done: { type: "checkbox", checkbox: true },
@@ -126,12 +153,14 @@ test("renders inline database rows as Markdown tasks", async () => {
             },
           },
           {
+            id: secondRowId,
             properties: {
               Name: { type: "title", title: [{ plain_text: "Book dentist" }] },
               Status: { type: "status", status: { name: "Not started" } },
             },
           },
           {
+            id: thirdRowId,
             properties: {
               Name: { type: "title", title: [{ plain_text: "Send invoice" }] },
               Status: { type: "status", status: { name: "Done" } },
@@ -147,10 +176,16 @@ test("renders inline database rows as Markdown tasks", async () => {
     notionClient: notion as unknown as Client,
     config: { parseChildPages: false },
   });
-  configureInlineDatabaseRenderer(n2m, notion);
+  configureInlineDatabaseRenderer(n2m, notion, "parent/page.md", {
+    [firstRowId.replaceAll("-", "")]: "tasks/buy-milk.md",
+    [secondRowId.replaceAll("-", "")]: "tasks/book-dentist.md",
+    [thirdRowId.replaceAll("-", "")]: "tasks/send-invoice.md",
+  });
 
   assert.equal(
     await convertPage(n2m, page.id),
-    "\n## Todo List\n- [x] Buy milk (Due: 2026-07-20)\n- [ ] Book dentist\n- [x] Send invoice\n\n",
+    "\n## Todo List\n- [x] [Buy milk](../tasks/buy-milk.md) (Due: 2026-07-20)\n"
+      + "- [ ] [Book dentist](../tasks/book-dentist.md)\n"
+      + "- [x] [Send invoice](../tasks/send-invoice.md)\n\n",
   );
 });

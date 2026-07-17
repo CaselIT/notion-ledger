@@ -28,6 +28,7 @@ interface ReconcileOptions {
   outputDir: string;
   rootPageId: string;
   renderedPages: RenderedPage[];
+  pagePaths?: Record<string, string>;
   filenameStrategy: FilenameStrategy;
   deleteOrphans: boolean;
 }
@@ -146,10 +147,29 @@ export function serializeIndex(index: MirrorIndex): string {
   return `${JSON.stringify({ ...index, pages }, null, 2)}\n`;
 }
 
+export async function planPagePaths(
+  outputDir: string,
+  rootPageId: string,
+  pages: PageMetadata[],
+  filenameStrategy: FilenameStrategy,
+): Promise<Record<string, string>> {
+  const previous = await readIndex(outputDir, rootPageId);
+  const usedPaths = new Set(
+    Object.values(previous.pages).map((entry) => entry.path.toLowerCase()),
+  );
+  const pagePaths: Record<string, string> = {};
+  for (const page of [...pages].sort((left, right) => left.id.localeCompare(right.id))) {
+    pagePaths[page.id] = previous.pages[page.id]?.path
+      ?? allocatePagePath(page, filenameStrategy, usedPaths);
+  }
+  return pagePaths;
+}
+
 export async function reconcileMirror({
   outputDir,
   rootPageId,
   renderedPages,
+  pagePaths,
   filenameStrategy,
   deleteOrphans,
 }: ReconcileOptions): Promise<ReconcileResult> {
@@ -165,8 +185,12 @@ export async function reconcileMirror({
   for (const { page, content } of [...renderedPages].sort(
     (left, right) => left.page.id.localeCompare(right.page.id),
   )) {
-    const pagePath = previous.pages[page.id]?.path
+    const pagePath = pagePaths?.[page.id]
+      ?? previous.pages[page.id]?.path
       ?? allocatePagePath(page, filenameStrategy, usedPaths);
+    if (previous.pages[page.id] && previous.pages[page.id].path !== pagePath) {
+      throw new Error(`Planned path does not preserve the indexed path for page ${page.id}.`);
+    }
     const targetPath = resolveIndexedPath(outputDir, pagePath);
     if (await writeIfChanged(targetPath, content)) {
       pagesChanged += 1;

@@ -10,7 +10,7 @@ Notion Ledger is a Node.js 24 GitHub Action that mirrors one selected Notion pag
 4. Store the root page URL or ID as a repository variable such as `NOTION_MIRROR_ROOT_PAGE`.
 5. Use a private target repository and protect its default branch as appropriate for the designated mirror bot.
 
-The root page and descendant `child_page` blocks are exported. Other pages accessible to the integration are not searched or exported.
+The root page, descendant `child_page` blocks, and rows of inline databases encountered in that tree are exported. Other pages accessible to the integration are not searched or exported.
 
 ## Workflow
 
@@ -105,7 +105,11 @@ Known Milestone 1 limitations:
 
 - Notion formatting is not losslessly reversible. Callouts and tables use Markdown/HTML approximations, toggles use HTML details blocks, and columns are flattened into reading order.
 - Child pages are deliberately excluded from a parent's Markdown body and exported as their own indexed files.
-- Inline database rows are rendered in place as a readable list. Checkbox properties and standard task statuses (`Done`, `Complete`, or `Completed`) become GFM task markers, and date properties are included as item details; views, filters, sorts, and other database properties are not reproduced.
+- Inline database rows are rendered in place and exported as stable Markdown files.
+	- Row titles link to their exported files.
+	- Checkbox properties and standard task statuses (`Done`, `Complete`, or `Completed`) become GFM task markers.
+	- Date properties are included as item details.
+	- Views, filters, sorts, and other database properties are not reproduced.
 - Images and file attachments retain their source URLs. Notion-hosted URLs may expire, so the current mirror is not a durable attachment archive.
 - API pagination is handled for block traversal, but retries and explicit rate-limit backoff rely on the official SDK behavior in this release.
 

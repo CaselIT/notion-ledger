@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { PageMetadata } from "../src/notion";
-import { INDEX_FILENAME, reconcileMirror } from "../src/state";
+import { INDEX_FILENAME, planPagePaths, reconcileMirror } from "../src/state";
 
 const rootPageId = "11111111111111111111111111111111";
 const childPageId = "22222222222222222222222222222222";
@@ -79,6 +79,31 @@ test("writes deterministic files and preserves paths across title changes", asyn
   );
   assert.equal(renamedIndex.pages[childPageId].path, childPath);
   assert.equal(await fs.readFile(path.join(outputDir, childPath), "utf8"), "updated\n");
+});
+
+test("plans stable paths before pages are rendered", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  await reconcileMirror({
+    outputDir,
+    rootPageId,
+    renderedPages: [renderedPage(rootPageId, "Original")],
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+
+  const pages = [
+    renderedPage(rootPageId, "Renamed").page,
+    renderedPage(childPageId, "Database task").page,
+  ];
+  const paths = await planPagePaths(
+    outputDir,
+    rootPageId,
+    pages,
+    "slug-and-id",
+  );
+
+  assert.equal(paths[rootPageId], `original--${rootPageId.slice(0, 8)}.md`);
+  assert.equal(paths[childPageId], `database-task--${childPageId.slice(0, 8)}.md`);
 });
 
 test("deletes only indexed orphan files when enabled", async (t) => {

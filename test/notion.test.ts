@@ -138,6 +138,26 @@ test("queries all pages in an inline database", async () => {
   assert.deepEqual(cursors, [undefined, "next"]);
 });
 
+test("discovers inline database rows as child pages", async () => {
+  const notion = createNotionMock();
+  notion.blocks.children.list = async () => ({
+    results: [{ id: "database-id", type: "child_database", has_children: false }],
+    has_more: false,
+    next_cursor: null,
+  });
+  notion.databases.retrieve = async () => ({
+    object: "database",
+    data_sources: [{ id: "data-source-id", name: "Tasks" }],
+  });
+  notion.dataSources.query = async () => ({
+    results: [{ object: "page", id: childId }],
+    has_more: false,
+    next_cursor: null,
+  });
+
+  assert.deepEqual(await findChildPageIds(notion, rootId), [childId]);
+});
+
 test("discovers root and descendant metadata", async () => {
   const notion = createNotionMock();
   const pages = await discoverPages(notion, rootId);

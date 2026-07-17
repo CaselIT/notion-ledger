@@ -13,7 +13,7 @@ import {
   convertPage,
   renderPage,
 } from "./render";
-import { reconcileMirror } from "./state";
+import { planPagePaths, reconcileMirror } from "./state";
 
 export async function run(): Promise<void> {
   const notionToken = core.getInput("notion-token", { required: true });
@@ -40,7 +40,6 @@ export async function run(): Promise<void> {
     notionClient: notion,
     config: { parseChildPages: false },
   });
-  configureInlineDatabaseRenderer(n2m, notion);
 
   core.info("Discovering pages below the configured Notion root.");
   const pages = await discoverPages(notion, rootPageId, {
@@ -49,9 +48,16 @@ export async function run(): Promise<void> {
       + "User information without email addresses capability.",
     ),
   });
+  const pagePaths = await planPagePaths(
+    outputDir,
+    rootPageId,
+    pages,
+    filenameStrategy,
+  );
   const renderedPages = [];
   for (const page of pages) {
     core.info(`Rendering "${page.title}" (${page.id}).`);
+    configureInlineDatabaseRenderer(n2m, notion, pagePaths[page.id], pagePaths);
     const markdown = await convertPage(n2m, page.id);
     renderedPages.push({
       page,
@@ -63,6 +69,7 @@ export async function run(): Promise<void> {
     outputDir,
     rootPageId,
     renderedPages,
+    pagePaths,
     filenameStrategy,
     deleteOrphans,
   });
