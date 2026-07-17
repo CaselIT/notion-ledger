@@ -4,7 +4,7 @@
   "description": "A versioned Markdown mirror for Notion.",
   "main": "dist/index.cjs",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.cjs --minify --sourcemap",
+    "build": "node scripts/build.mjs",
     "mirror:local": "tsx src/index.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
