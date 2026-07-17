@@ -5,25 +5,24 @@ import test from "node:test";
 import {
   parseBoolean,
   parseFilenameStrategy,
-  parseRootPageId,
+  parseRootPageIds,
   resolveOutputDirectory,
 } from "../src/inputs";
 
-test("parses Notion IDs and URLs", () => {
+test("parses and deduplicates Notion root page IDs and URLs", () => {
   const id = "8fe4a1b2123434567890abcdefabcdef";
-  assert.equal(parseRootPageId(id), id);
-  assert.equal(
-    parseRootPageId("8fe4a1b2-1234-3456-7890-abcdefabcdef"),
+  const secondId = "1234567890abcdef1234567890abcdef";
+  assert.deepEqual(parseRootPageIds([
     id,
-  );
-  assert.equal(
-    parseRootPageId(`https://www.notion.so/Pricing-Governance-${id}?pvs=4`),
-    id,
-  );
+    "8fe4a1b2-1234-3456-7890-abcdefabcdef",
+    `https://www.notion.so/Pricing-Governance-${id}?pvs=4`,
+    secondId,
+  ].join("\n")), [id, secondId]);
 });
 
 test("rejects malformed inputs", () => {
-  assert.throws(() => parseRootPageId("not-a-page"), /Notion page URL or page ID/);
+  assert.throws(() => parseRootPageIds(""), /at least one/);
+  assert.throws(() => parseRootPageIds("not-a-page"), /Notion page URL or page ID/);
   assert.throws(() => parseBoolean("yes", "enabled"), /enabled must be/);
   assert.throws(() => parseFilenameStrategy("slug"), /filename-strategy/);
 });

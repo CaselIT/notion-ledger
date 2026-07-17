@@ -1,13 +1,13 @@
 name: Notion Ledger
-description: Mirror a selected Notion page tree to stable Markdown files
+description: Mirror selected Notion page trees to stable Markdown files
 author: CaselIT
 
 inputs:
   notion-token:
     description: Notion internal integration token
     required: true
-  root-page:
-    description: Notion root page URL or ID to mirror
+  root-pages:
+    description: Newline-delimited Notion root page URLs or IDs to mirror
     required: true
   output-dir:
     description: Repository-relative directory for generated Markdown
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: "true"
   delete-orphans:
-    description: Delete indexed files no longer found below the root
+    description: Delete indexed files no longer found below each configured root
     required: false
     default: "true"
   filename-strategy:

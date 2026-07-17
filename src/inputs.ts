@@ -16,16 +16,13 @@ export function parseBoolean(value: string, name: string): boolean {
 export function normalizePageId(value: string): string {
   const compact = value.replaceAll("-", "").toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(compact)) {
-    throw new Error("root-page must contain a valid 32-character Notion page ID.");
+    throw new Error("root-pages must contain valid 32-character Notion page IDs.");
   }
   return compact;
 }
 
-export function parseRootPageId(value: string): string {
+function parseRootPageId(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error("root-page is required.");
-  }
 
   const directId = trimmed.replaceAll("-", "");
   if (/^[0-9a-f]{32}$/i.test(directId)) {
@@ -40,9 +37,20 @@ export function parseRootPageId(value: string): string {
   }
   const match = decoded.match(PAGE_ID_PATTERN);
   if (!match) {
-    throw new Error("root-page must be a Notion page URL or page ID.");
+    throw new Error("Each root-pages entry must be a Notion page URL or page ID.");
   }
   return normalizePageId(match[1]);
+}
+
+export function parseRootPageIds(value: string): string[] {
+  const entries = value
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (entries.length === 0) {
+    throw new Error("root-pages must contain at least one Notion page URL or page ID.");
+  }
+  return [...new Set(entries.map(parseRootPageId))];
 }
 
 export function resolveOutputDirectory(workspace: string, outputDir: string): string {

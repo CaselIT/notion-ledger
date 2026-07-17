@@ -1,16 +1,16 @@
 # Notion Ledger
 
-Notion Ledger is a Node.js 24 GitHub Action that mirrors one selected Notion page tree to deterministic Markdown files. Notion remains the source of truth; the Action never writes content back to Notion or commits repository changes itself.
+Notion Ledger is a Node.js 24 GitHub Action that mirrors selected Notion page trees to deterministic Markdown files. Notion remains the source of truth; the Action never writes content back to Notion or commits repository changes itself.
 
 ## Setup
 
 1. Create a Notion internal integration with the **Read content** capability. Enable **User information without email addresses** only if generated front matter should include the last editor's name; otherwise `last_edited_by` is omitted.
 2. Connect the integration to a dedicated top-level page containing the documentation to mirror. Creating an integration alone does not grant access to any pages.
 3. Store the integration secret as a repository Actions secret named `NOTION_TOKEN`.
-4. Store the root page URL or ID as a repository variable such as `NOTION_MIRROR_ROOT_PAGE`.
+4. Store the selected root page URLs or IDs in a newline-delimited repository variable such as `NOTION_MIRROR_ROOT_PAGES`.
 5. Use a private target repository and protect its default branch as appropriate for the designated mirror bot.
 
-The root page, descendant `child_page` blocks, and rows of inline databases encountered in that tree are exported. Other pages accessible to the integration are not searched or exported.
+Each configured root page, its descendant `child_page` blocks, and rows of inline databases encountered in that tree are exported. Other pages accessible to the integration are not searched or exported.
 
 ## Workflow
 
@@ -40,7 +40,7 @@ jobs:
 				uses: CaselIT/notion-ledger@<PINNED_COMMIT_SHA>
 				with:
 					notion-token: ${{ secrets.NOTION_TOKEN }}
-					root-page: ${{ vars.NOTION_MIRROR_ROOT_PAGE }}
+					root-pages: ${{ vars.NOTION_MIRROR_ROOT_PAGES }}
 					output-dir: docs/notion
 					add-frontmatter: "true"
 					delete-orphans: "true"
@@ -67,7 +67,7 @@ Staging with `git add --all` before `git diff --cached --quiet` is required so n
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
 | `notion-token` | Yes | | Notion internal integration token. Read it from an Actions secret. |
-| `root-page` | Yes | | Root Notion page URL or 32-character page ID. |
+| `root-pages` | Yes | | Newline-delimited Notion root page URLs or 32-character page IDs. Duplicate IDs are ignored. |
 | `output-dir` | No | `docs/notion` | Repository-relative output directory. The repository root and paths outside the workspace are rejected. |
 | `add-frontmatter` | No | `true` | Include YAML source metadata in each Markdown file. |
 | `delete-orphans` | No | `true` | Delete indexed mirror files for pages no longer found below the root. |
@@ -85,17 +85,22 @@ Boolean inputs accept only `true` or `false` (case-insensitive).
 
 ## Generated Files
 
-The default strategy initially creates paths such as:
+Each root receives a stable directory, and the default strategy initially creates paths such as:
 
 ```text
-docs/notion/pricing-governance--8fe4a1b2.md
+docs/notion/
+	.mirror-roots.json
+	engineering--8fe4a1b2/
+		.mirror-index.json
+		engineering--8fe4a1b2.md
+		pricing-governance--12345678.md
 ```
 
-`docs/notion/.mirror-index.json` maps full Notion page IDs to paths. Once allocated, a page keeps its path when its title changes, preserving Git history and avoiding collisions between duplicate titles. The index is deterministic and belongs to one root page; using the same output directory for a different root fails instead of mixing mirrors.
+`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
 
 Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are intentionally omitted, so rerunning without source changes produces no file changes.
 
-With `delete-orphans: true`, only files recorded in the validated index are deleted. User-authored files in `output-dir` and every file outside it are left alone. With deletion disabled, prior orphan entries and files remain in the index so a page that returns keeps its original path.
+With `delete-orphans: true`, only files recorded in each configured root's validated index are deleted. User-authored files in `output-dir` and every file outside it are left alone. Removing a root from `root-pages` does not delete its directory or root-index entry. With deletion disabled, prior orphan entries and files remain in the page index so a page that returns keeps its original path.
 
 ## Markdown Behavior
 
@@ -133,7 +138,7 @@ npm run build
 On windows in powershell:
 ```powershell
 [Environment]::SetEnvironmentVariable('INPUT_NOTION-TOKEN', $env:NOTION_TOKEN, 'Process')
-[Environment]::SetEnvironmentVariable('INPUT_ROOT-PAGE', $env:NOTION_MIRROR_ROOT_PAGE, 'Process')
+[Environment]::SetEnvironmentVariable('INPUT_ROOT-PAGES', $env:NOTION_MIRROR_ROOT_PAGES, 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_OUTPUT-DIR', 'docs/notion-local-test', 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_ADD-FRONTMATTER', 'true', 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_DELETE-ORPHANS', 'false', 'Process')
@@ -144,14 +149,15 @@ npm run mirror:local
 
 On a bash-like shell:
 ```sh
-export INPUT_NOTION-TOKEN="$NOTION_TOKEN"
-export INPUT_ROOT-PAGE="$NOTION_MIRROR_ROOT_PAGE"
-export INPUT_OUTPUT-DIR='docs/notion-local-test'
-export INPUT_ADD-FRONTMATTER='true'
-export INPUT_DELETE-ORPHANS='false'
 export GITHUB_WORKSPACE="$PWD"
 
-npm run mirror:local
+env \
+	'INPUT_NOTION-TOKEN'="$NOTION_TOKEN" \
+	'INPUT_ROOT-PAGES'="$NOTION_MIRROR_ROOT_PAGES" \
+	'INPUT_OUTPUT-DIR'='docs/notion-local-test' \
+	'INPUT_ADD-FRONTMATTER'='true' \
+	'INPUT_DELETE-ORPHANS'='false' \
+	npm run mirror:local
 ```
 
-Set `NOTION_TOKEN` and `NOTION_MIRROR_ROOT_PAGE` in your shell or a local secret manager before running this command. Do not commit either value. After inspecting the generated output and mirror index, enable orphan deletion only when testing in an isolated output directory.
+Set `NOTION_TOKEN` and newline-delimited `NOTION_MIRROR_ROOT_PAGES` in your shell or a local secret manager before running this command. Do not commit either value. After inspecting the generated output and mirror indexes, enable orphan deletion only when testing in an isolated output directory.

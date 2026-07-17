@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { PageMetadata } from "../src/notion";
-import { INDEX_FILENAME, planPagePaths, reconcileMirror } from "../src/state";
+import {
+  INDEX_FILENAME,
+  planPagePaths,
+  planRootPaths,
+  reconcileMirror,
+  ROOTS_INDEX_FILENAME,
+} from "../src/state";
 
 const rootPageId = "11111111111111111111111111111111";
 const childPageId = "22222222222222222222222222222222";
@@ -104,6 +110,42 @@ test("plans stable paths before pages are rendered", async (t) => {
 
   assert.equal(paths[rootPageId], `original--${rootPageId.slice(0, 8)}.md`);
   assert.equal(paths[childPageId], `database-task--${childPageId.slice(0, 8)}.md`);
+});
+
+test("preserves root directories across title and configuration changes", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  const firstRoot = renderedPage(rootPageId, "Engineering").page;
+  const secondRoot = renderedPage(childPageId, "Personal").page;
+
+  const initial = await planRootPaths(outputDir, [firstRoot, secondRoot]);
+  assert.equal(initial[rootPageId], `engineering--${rootPageId.slice(0, 8)}`);
+  assert.equal(initial[childPageId], `personal--${childPageId.slice(0, 8)}`);
+
+  const renamed = await planRootPaths(outputDir, [
+    { ...firstRoot, title: "Renamed engineering" },
+  ]);
+  assert.equal(renamed[rootPageId], initial[rootPageId]);
+
+  const restored = await planRootPaths(outputDir, [secondRoot]);
+  assert.equal(restored[childPageId], initial[childPageId]);
+});
+
+test("rejects unsafe paths from a tampered root index", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  await fs.writeFile(
+    path.join(outputDir, ROOTS_INDEX_FILENAME),
+    JSON.stringify({
+      version: 1,
+      roots: {
+        [rootPageId]: { path: ".", title: "Unsafe" },
+      },
+    }),
+  );
+
+  await assert.rejects(
+    planRootPaths(outputDir, [renderedPage(rootPageId, "Root").page]),
+    /invalid entry/,
+  );
 });
 
 test("deletes only indexed orphan files when enabled", async (t) => {

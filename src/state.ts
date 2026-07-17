@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FilenameStrategy } from "./inputs";
 import type { PageMetadata } from "./notion";
-import { allocatePagePath, resolveIndexedPath } from "./paths";
+import { allocatePagePath, resolveIndexedPath, slugTitle } from "./paths";
 
 export const INDEX_FILENAME = ".mirror-index.json";
+export const ROOTS_INDEX_FILENAME = ".mirror-roots.json";
 const INDEX_VERSION = 1;
 
 interface MirrorIndexEntry {
@@ -17,6 +18,11 @@ interface MirrorIndex {
   version: number;
   root_page_id: string;
   pages: Record<string, MirrorIndexEntry>;
+}
+
+interface RootIndex {
+  version: number;
+  roots: Record<string, { path: string; title: string }>;
 }
 
 interface RenderedPage {
@@ -41,6 +47,10 @@ export interface ReconcileResult {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function emptyIndex(rootPageId: string): MirrorIndex {
@@ -145,6 +155,62 @@ export function serializeIndex(index: MirrorIndex): string {
     Object.entries(index.pages).sort(([left], [right]) => left.localeCompare(right)),
   );
   return `${JSON.stringify({ ...index, pages }, null, 2)}\n`;
+}
+
+export async function planRootPaths(
+  outputDir: string,
+  roots: PageMetadata[],
+): Promise<Record<string, string>> {
+  await fs.mkdir(outputDir, { recursive: true });
+  const indexPath = path.join(outputDir, ROOTS_INDEX_FILENAME);
+  let index: RootIndex = { version: INDEX_VERSION, roots: {} };
+  try {
+    const parsed = JSON.parse(await fs.readFile(indexPath, "utf8")) as unknown;
+    if (!isRecord(parsed) || parsed.version !== INDEX_VERSION || !isRecord(parsed.roots)) {
+      throw new Error(`Root index is incompatible: ${indexPath}.`);
+    }
+    for (const entry of Object.values(parsed.roots)) {
+      if (!isRecord(entry) || typeof entry.path !== "string"
+        || typeof entry.title !== "string" || entry.path === "."
+        || path.dirname(entry.path) !== ".") {
+        throw new Error(`Root index contains an invalid entry: ${indexPath}.`);
+      }
+      resolveIndexedPath(outputDir, entry.path);
+    }
+    index = parsed as unknown as RootIndex;
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") {
+      if (error instanceof SyntaxError) {
+        throw new Error(`Root index is not valid JSON: ${indexPath}.`);
+      }
+      throw error;
+    }
+  }
+
+  const usedPaths = new Set(
+    Object.values(index.roots).map((entry) => entry.path.toLowerCase()),
+  );
+  const rootPaths: Record<string, string> = {};
+  for (const root of roots) {
+    let rootPath = index.roots[root.id]?.path;
+    if (!rootPath) {
+      rootPath = `${slugTitle(root.title)}--${root.id.slice(0, 8)}`;
+      if (usedPaths.has(rootPath.toLowerCase())) {
+        rootPath = `${slugTitle(root.title)}--${root.id}`;
+      }
+      if (usedPaths.has(rootPath.toLowerCase())) {
+        throw new Error(`Unable to allocate a unique output directory for root ${root.id}.`);
+      }
+      usedPaths.add(rootPath.toLowerCase());
+    }
+    rootPaths[root.id] = rootPath;
+    index.roots[root.id] = { path: rootPath, title: root.title };
+  }
+  const sortedRoots = Object.fromEntries(
+    Object.entries(index.roots).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  await writeIfChanged(indexPath, `${JSON.stringify({ ...index, roots: sortedRoots }, null, 2)}\n`);
+  return rootPaths;
 }
 
 export async function planPagePaths(
