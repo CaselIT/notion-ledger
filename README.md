@@ -20,44 +20,44 @@ Pin both checkout and this Action to immutable commit SHAs in production. The co
 name: Mirror Notion documentation
 
 on:
-	workflow_dispatch:
-	schedule:
-		- cron: "*/30 * * * *"
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
 
 permissions:
-	contents: write
+  contents: write
 
 jobs:
-	mirror:
-		runs-on: ubuntu-latest
-		steps:
-			- name: Check out repository
-				uses: actions/checkout@12cd2235efa0937479335606d7c3ac9f6c0973b1
-				with:
-					fetch-depth: 0
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@12cd2235efa0937479335606d7c3ac9f6c0973b1
+        with:
+          fetch-depth: 0
 
-			- name: Export Notion documentation
-				uses: CaselIT/notion-ledger@<PINNED_COMMIT_SHA>
-				with:
-					notion-token: ${{ secrets.NOTION_TOKEN }}
-					root-pages: ${{ vars.NOTION_MIRROR_ROOT_PAGES }}
-					output-dir: docs/notion
-					add-frontmatter: "true"
-					delete-orphans: "true"
+      - name: Export Notion documentation
+        uses: CaselIT/notion-ledger@<PINNED_COMMIT_SHA>
+        with:
+          notion-token: ${{ secrets.NOTION_TOKEN }}
+          root-pages: ${{ vars.NOTION_MIRROR_ROOT_PAGES }}
+          output-dir: docs/notion
+          add-frontmatter: "true"
+          delete-orphans: "true"
 
-			- name: Commit documentation updates
-				shell: bash
-				run: |
-					git add --all
-					if git diff --cached --quiet; then
-						echo "No Notion content changes found."
-						exit 0
-					fi
+      - name: Commit documentation updates
+        shell: bash
+        run: |
+          git add --all
+          if git diff --cached --quiet; then
+            echo "No Notion content changes found."
+            exit 0
+          fi
 
-					git config user.name "notion-sync-bot"
-					git config user.email "notion-sync-bot@users.noreply.github.com"
-					git commit -m "docs: mirror Notion knowledge base"
-					git push
+          git config user.name "notion-sync-bot"
+          git config user.email "notion-sync-bot@users.noreply.github.com"
+          git commit -m "docs: mirror Notion knowledge base"
+          git push
 ```
 
 Staging with `git add --all` before `git diff --cached --quiet` is required so newly created and deleted files are detected.
@@ -89,11 +89,11 @@ Each root receives a stable directory, and the default strategy initially create
 
 ```text
 docs/notion/
-	.mirror-roots.json
-	engineering--8fe4a1b2/
-		.mirror-index.json
-		engineering--8fe4a1b2.md
-		pricing-governance--12345678.md
+  .mirror-roots.json
+  engineering--8fe4a1b2/
+    .mirror-index.json
+    engineering--8fe4a1b2.md
+    pricing-governance--12345678.md
 ```
 
 `.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
@@ -111,10 +111,10 @@ Known Milestone 1 limitations:
 - Notion formatting is not losslessly reversible. Callouts and tables use Markdown/HTML approximations, toggles use HTML details blocks, and columns are flattened into reading order.
 - Child pages are deliberately excluded from a parent's Markdown body and exported as their own indexed files.
 - Inline database rows are rendered in place and exported as stable Markdown files.
-	- Row titles link to their exported files.
-	- Checkbox properties and standard task statuses (`Done`, `Complete`, or `Completed`) become GFM task markers.
-	- Date properties are included as item details.
-	- Views, filters, sorts, and other database properties are not reproduced.
+  - Row titles link to their exported files.
+  - Checkbox properties and standard task statuses (`Done`, `Complete`, or `Completed`) become GFM task markers.
+  - Date properties are included as item details.
+  - Views, filters, sorts, and other database properties are not reproduced.
 - Images and file attachments retain their source URLs. Notion-hosted URLs may expire, so the current mirror is not a durable attachment archive.
 - API pagination is handled for block traversal, but retries and explicit rate-limit backoff rely on the official SDK behavior in this release.
 
@@ -152,12 +152,12 @@ On a bash-like shell:
 export GITHUB_WORKSPACE="$PWD"
 
 env \
-	'INPUT_NOTION-TOKEN'="$NOTION_TOKEN" \
-	'INPUT_ROOT-PAGES'="$NOTION_MIRROR_ROOT_PAGES" \
-	'INPUT_OUTPUT-DIR'='docs/notion-local-test' \
-	'INPUT_ADD-FRONTMATTER'='true' \
-	'INPUT_DELETE-ORPHANS'='false' \
-	npm run mirror:local
+  'INPUT_NOTION-TOKEN'="$NOTION_TOKEN" \
+  'INPUT_ROOT-PAGES'="$NOTION_MIRROR_ROOT_PAGES" \
+  'INPUT_OUTPUT-DIR'='docs/notion-local-test' \
+  'INPUT_ADD-FRONTMATTER'='true' \
+  'INPUT_DELETE-ORPHANS'='false' \
+  npm run mirror:local
 ```
 
 Set `NOTION_TOKEN` and newline-delimited `NOTION_MIRROR_ROOT_PAGES` in your shell or a local secret manager before running this command. Do not commit either value. After inspecting the generated output and mirror indexes, enable orphan deletion only when testing in an isolated output directory.
