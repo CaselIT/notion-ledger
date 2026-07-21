@@ -22,7 +22,8 @@ name: Mirror Notion documentation
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    # At :29 and :59 during the European workday business hours. Adjust as needed
+    - cron: "29,59 7-16 * * 1-5"
 
 permissions:
   contents: write
