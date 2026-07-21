@@ -61,22 +61,28 @@ export interface PageMetadata {
 
 export interface DiscoverPagesOptions {
   onUserInfoUnavailable?: () => void;
+  onProgress?: (message: string) => void;
 }
 
 export async function listAllChildren(
   notion: NotionClient,
   blockId: string,
+  onProgress?: (message: string) => void,
 ): Promise<BlockResponse[]> {
   const blocks: BlockResponse[] = [];
   let cursor: string | undefined;
+  let batch = 1;
   do {
+    onProgress?.(`Listing child blocks for ${blockId} (batch ${batch}).`);
     const response = await notion.blocks.children.list({
       block_id: blockId,
       page_size: 100,
       ...(cursor ? { start_cursor: cursor } : {}),
     });
     blocks.push(...response.results);
+    onProgress?.(`Received ${response.results.length} child block(s) for ${blockId}.`);
     cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+    batch += 1;
   } while (cursor);
 
   return blocks;
@@ -85,22 +91,23 @@ export async function listAllChildren(
 export async function findChildPageIds(
   notion: NotionClient,
   blockId: string,
+  onProgress?: (message: string) => void,
 ): Promise<string[]> {
   const pageIds: string[] = [];
-  const blocks = await listAllChildren(notion, blockId);
+  const blocks = await listAllChildren(notion, blockId, onProgress);
 
   for (const block of blocks) {
     if ("type" in block && block.type === "child_page") {
       pageIds.push(normalizePageId(block.id));
     } else if ("type" in block && block.type === "child_database") {
-      const rows = await queryInlineDatabaseRows(notion, block.id);
+      const rows = await queryInlineDatabaseRows(notion, block.id, onProgress);
       for (const row of rows) {
         if (isRecord(row) && row.object === "page" && typeof row.id === "string") {
           pageIds.push(normalizePageId(row.id));
         }
       }
     } else if ("has_children" in block && block.has_children) {
-      pageIds.push(...await findChildPageIds(notion, block.id));
+      pageIds.push(...await findChildPageIds(notion, block.id, onProgress));
     }
   }
 
@@ -127,19 +134,25 @@ function getDataSourceId(database: unknown): string {
 export async function queryInlineDatabaseRows(
   notion: Pick<NotionClient, "databases" | "dataSources">,
   databaseId: string,
+  onProgress?: (message: string) => void,
 ): Promise<unknown[]> {
+  onProgress?.(`Retrieving inline database metadata for ${databaseId}.`);
   const database = await notion.databases.retrieve({ database_id: databaseId });
   const dataSourceId = getDataSourceId(database);
   const rows: unknown[] = [];
   let cursor: string | undefined;
+  let batch = 1;
   do {
+    onProgress?.(`Querying inline database ${databaseId} (batch ${batch}).`);
     const response = await notion.dataSources.query({
       data_source_id: dataSourceId,
       page_size: 100,
       ...(cursor ? { start_cursor: cursor } : {}),
     });
     rows.push(...response.results);
+    onProgress?.(`Received ${response.results.length} row(s) from inline database ${databaseId}.`);
     cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+    batch += 1;
   } while (cursor);
 
   return rows;
@@ -207,7 +220,7 @@ async function retrieveUserName(
 export async function discoverPages(
   notion: NotionClient,
   rootPageId: string,
-  { onUserInfoUnavailable }: DiscoverPagesOptions = {},
+  { onUserInfoUnavailable, onProgress }: DiscoverPagesOptions = {},
 ): Promise<PageMetadata[]> {
   const pages: PageMetadata[] = [];
   const visited = new Set();
@@ -221,6 +234,7 @@ export async function discoverPages(
     }
     visited.add(normalizedId);
 
+    onProgress?.(`Retrieving page metadata for ${normalizedId}.`);
     const page = await notion.pages.retrieve({ page_id: normalizedId });
     const metadata = toPageMetadata(page);
     const lastEditedById = getLastEditedById(page);
@@ -244,7 +258,8 @@ export async function discoverPages(
     }
     pages.push(metadata);
 
-    const childIds = await findChildPageIds(notion, normalizedId);
+    const childIds = await findChildPageIds(notion, normalizedId, onProgress);
+    onProgress?.(`Discovered ${childIds.length} child page(s) below ${normalizedId}.`);
     for (const childId of childIds) {
       await visit(childId);
     }

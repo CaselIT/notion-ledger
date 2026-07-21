@@ -112,6 +112,7 @@ export function configureInlineDatabaseRenderer(
   notion: Pick<NotionClient, "databases" | "dataSources">,
   currentPagePath?: string,
   pagePaths?: Record<string, string>,
+  onProgress?: (message: string) => void,
 ): void {
   n2m.setCustomTransformer("child_database", async (block) => {
     if (!("child_database" in block) || !isRecord(block.child_database)) {
@@ -121,7 +122,7 @@ export function configureInlineDatabaseRenderer(
       && block.child_database.title.trim()
       ? block.child_database.title.trim()
       : "Database";
-    const rows = await queryInlineDatabaseRows(notion, block.id);
+    const rows = await queryInlineDatabaseRows(notion, block.id, onProgress);
     const markdownRows = rows.map(
       (row) => renderInlineDatabaseRow(row, currentPagePath, pagePaths),
     );

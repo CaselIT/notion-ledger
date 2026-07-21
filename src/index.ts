@@ -18,6 +18,12 @@ import { planPagePaths, planRootPaths, reconcileMirror } from "./state";
 
 export async function run(): Promise<void> {
   const notionToken = core.getInput("notion-token", { required: true });
+  const debugEnabled = process.env.NOTION_LEDGER_DEBUG?.trim().toLowerCase() === "true";
+  const debug = (message: string): void => {
+    if (debugEnabled) {
+      core.info(`[debug] ${message}`);
+    }
+  };
   const rootPageIds = parseRootPageIds(core.getInput("root-pages", { required: true }));
   const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
   const outputDir = resolveOutputDirectory(
@@ -50,6 +56,7 @@ export async function run(): Promise<void> {
   for (const rootPageId of rootPageIds) {
     core.info(`Discovering pages below Notion root ${rootPageId}.`);
     const pages = await discoverPages(notion, rootPageId, {
+      onProgress: debug,
       onUserInfoUnavailable: () => {
         if (!warnedAboutUserInfo) {
           warnedAboutUserInfo = true;
@@ -84,8 +91,8 @@ export async function run(): Promise<void> {
     );
     const renderedPages = [];
     for (const page of pages) {
-      core.info(`Rendering "${page.title}" (${page.id}).`);
-      configureInlineDatabaseRenderer(n2m, notion, pagePaths[page.id], pagePaths);
+      debug(`Rendering "${page.title}" (${page.id}).`);
+      configureInlineDatabaseRenderer(n2m, notion, pagePaths[page.id], pagePaths, debug);
       const markdown = await convertPage(n2m, page.id);
       renderedPages.push({
         page,

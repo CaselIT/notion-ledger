@@ -173,6 +173,20 @@ test("discovers root and descendant metadata", async () => {
   assert.equal(notion.userRetrievals(), 1);
 });
 
+test("reports discovery progress when requested", async () => {
+  const progress: string[] = [];
+
+  await discoverPages(createNotionMock(), rootId, {
+    onProgress: (message) => progress.push(message),
+  });
+
+  assert.ok(progress.includes(`Retrieving page metadata for ${rootId}.`));
+  assert.ok(progress.includes(`Listing child blocks for ${rootId} (batch 1).`));
+  assert.ok(progress.includes(`Received 1 child block(s) for ${rootId}.`));
+  assert.ok(progress.includes(`Discovered 1 child page(s) below ${rootId}.`));
+  assert.ok(progress.includes(`Retrieving page metadata for ${childId}.`));
+});
+
 test("omits editor names when user information is unavailable", async () => {
   const notion = createNotionMock();
   let userRetrievals = 0;
