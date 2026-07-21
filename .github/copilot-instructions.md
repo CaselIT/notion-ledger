@@ -32,6 +32,7 @@
 - Orphan cleanup may delete only validated files recorded in the mirror index. Never remove user-authored files or files outside `output-dir`.
 - Removing a root from `root-pages` must not automatically delete its directory or root-index entry.
 - Use the official retrieve-page-Markdown API for content and child-reference discovery. Do not reconstruct page Markdown from block objects.
+- Discover child references by parsing the enhanced Markdown for `<page>` and `<database>` tags rather than walking the block tree. This grep-based traversal is deliberate: the block/children API approach was too slow at scale, so accept the coupling to the Markdown tag format as the intended trade-off.
 - Retrieve each page's Markdown once per run and reuse it for rendering. When Notion truncates a response, retrieve each reported unknown block subtree through the same official Markdown API and replace its placeholder in place. Resolve a self-referential page alias through the official block API, fetch its target title, and render it without traversing the target. Preserve other self-referential unresolved `<unknown>` placeholders with a visible warning. Traverse discovered page references depth-first; inline database rows continue to use the official database and data-source APIs.
 - Preserve source image/file URLs. Do not add asset downloading unless it is implemented end to end with stable names, URL rewriting, failure handling, size limits, tests, and documentation.
 

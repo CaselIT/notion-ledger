@@ -1,6 +1,9 @@
 import { stringify } from "yaml";
 import type { PageMetadata } from "./notion";
 
+export const GENERATED_MARKER =
+  "<!-- Generated from Notion. Edit the source page in Notion, not this file. -->";
+
 export function createFrontmatter(page: PageMetadata): string {
   const metadata: Record<string, string> = {
     source: "notion",
@@ -31,5 +34,3 @@ export function renderPage(
   return `${sections.join("\n\n")}\n`;
 }
 
-export const GENERATED_MARKER =
-  "<!-- Generated from Notion. Edit the source page in Notion, not this file. -->";

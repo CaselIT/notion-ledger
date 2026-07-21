@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APIErrorCode, APIResponseError } from "@notionhq/client";
 import {
+  type DiscoveredPage,
   discoverPages,
+  type DiscoverPagesOptions,
   findMarkdownReferences,
   queryInlineDatabaseRows,
 } from "../src/notion";
@@ -13,6 +15,22 @@ const databaseId = "33333333333333333333333333333333";
 const unknownBlockId = "44444444444444444444444444444444";
 const nestedUnknownBlockId = "55555555555555555555555555555555";
 const aliasTargetId = "66666666666666666666666666666666";
+
+async function collectPages(
+  notion: Parameters<typeof discoverPages>[0],
+  rootPageId: string,
+  options: DiscoverPagesOptions = {},
+): Promise<DiscoveredPage[]> {
+  const pages: DiscoveredPage[] = [];
+  await discoverPages(notion, rootPageId, {
+    ...options,
+    onPage: async (page) => {
+      await options.onPage?.(page);
+      pages.push(page);
+    },
+  });
+  return pages;
+}
 
 function createNotionMock(): Parameters<typeof discoverPages>[0] & {
   userRetrievals: () => number;
@@ -154,14 +172,14 @@ test("discovers inline database rows as child pages", async () => {
   });
 
   assert.deepEqual(
-    (await discoverPages(notion, rootId)).map((page) => page.id),
+    (await collectPages(notion, rootId)).map((page) => page.id),
     [rootId, childId],
   );
 });
 
 test("discovers root and descendant metadata", async () => {
   const notion = createNotionMock();
-  const pages = await discoverPages(notion, rootId);
+  const pages = await collectPages(notion, rootId);
   assert.deepEqual(
     pages.map(({ id, title }) => ({ id, title })),
     [
@@ -176,16 +194,14 @@ test("discovers root and descendant metadata", async () => {
   assert.match(pages[0].markdown, /<page /);
 });
 
-test("streams pages before descending without retaining them", async () => {
+test("streams each page through onPage in depth-first order", async () => {
   const streamed: string[] = [];
-  const pages = await discoverPages(createNotionMock(), rootId, {
-    collectPages: false,
-    onPage: async (page) => {
+  await discoverPages(createNotionMock(), rootId, {
+    onPage: (page) => {
       streamed.push(page.id);
     },
   });
 
-  assert.deepEqual(pages, []);
   assert.deepEqual(streamed, [rootId, childId]);
 });
 
@@ -230,7 +246,7 @@ test("retrieves and inserts truncated Markdown subtrees", async () => {
   };
 
   const progress: string[] = [];
-  const pages = await discoverPages(notion, rootId, {
+  const pages = await collectPages(notion, rootId, {
     onProgress: (message) => progress.push(message),
   });
 
@@ -279,7 +295,7 @@ test("recovers multiple recursively truncated subtrees in place", async () => {
     return { markdown: "", truncated: false, unknown_block_ids: [] };
   };
 
-  const pages = await discoverPages(notion, rootId);
+  const pages = await collectPages(notion, rootId);
 
   assert.equal(
     pages[0].markdown,
@@ -297,7 +313,7 @@ test("preserves self-referential unknown subtrees", async () => {
   });
   const unresolved: string[] = [];
 
-  const pages = await discoverPages(notion, rootId, {
+  const pages = await collectPages(notion, rootId, {
     onUnknownBlockUnresolved: (blockId) => unresolved.push(blockId),
   });
 
@@ -335,7 +351,7 @@ test("renders page aliases outside the current root without traversing them", as
     link_to_page: { type: "page_id", page_id: aliasTargetId },
   });
 
-  const pages = await discoverPages(notion, rootId);
+  const pages = await collectPages(notion, rootId);
 
   assert.deepEqual(pages.map((page) => page.id), [rootId]);
   assert.equal(
@@ -354,7 +370,7 @@ test("omits editor names when user information is unavailable", async () => {
   };
   let warnings = 0;
 
-  const pages = await discoverPages(notion, rootId, {
+  const pages = await collectPages(notion, rootId, {
     onUserInfoUnavailable: () => {
       warnings += 1;
     },

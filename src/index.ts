@@ -52,7 +52,6 @@ export async function run(): Promise<void> {
     core.info(`Discovering pages below Notion root ${rootPageId}.`);
     let writer: IncrementalMirrorWriter | undefined;
     await discoverPages(notion, rootPageId, {
-      collectPages: false,
       onProgress: debug,
       onPage: async (page) => {
         if (!writer) {

@@ -1,6 +1,10 @@
 import { APIErrorCode, APIResponseError } from "@notionhq/client";
 import { normalizePageId } from "./inputs";
 
+// Notion enhanced Markdown embeds page/block IDs as either a 32-character
+// compact form or a hyphenated UUID; this alternation matches both.
+const PAGE_ID = "[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
 interface PageResponse {
   id: string;
   url: string;
@@ -60,7 +64,6 @@ export interface MarkdownReference {
 }
 
 export interface DiscoverPagesOptions {
-  collectPages?: boolean;
   onPage?: (page: DiscoveredPage) => Promise<void> | void;
   onUnknownBlockUnresolved?: (blockId: string) => void;
   onUserInfoUnavailable?: () => void;
@@ -86,9 +89,7 @@ function replaceUnknownBlock(
     fallbackIndex ??= index;
     const url = placeholder[2].match(/\burl="([^"]+)"/)?.[1];
     const ids = url
-      ? Array.from(url.matchAll(
-        /([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=[^0-9a-f]|$)/gi,
-      ))
+      ? Array.from(url.matchAll(new RegExp(`(${PAGE_ID})(?=[^0-9a-f]|$)`, "gi")))
       : [];
     const id = ids.at(-1)?.[1];
     if (id && normalizePageId(id) === normalizedBlockId) {
@@ -216,9 +217,7 @@ export function findMarkdownReferences(markdown: string): MarkdownReference[] {
     if (/\boutside-current-root="true"/.test(tag[2])) {
       continue;
     }
-    const id = url.match(
-      /([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[^0-9a-f]|$)/i,
-    )?.[1];
+    const id = url.match(new RegExp(`(${PAGE_ID})(?:[^0-9a-f]|$)`, "i"))?.[1];
     if (!id) {
       throw new Error(`Notion Markdown ${tag[1]} reference has no page ID: ${url}`);
     }
@@ -334,14 +333,12 @@ export async function discoverPages(
   notion: NotionClient,
   rootPageId: string,
   {
-    collectPages = true,
     onPage,
     onUnknownBlockUnresolved,
     onUserInfoUnavailable,
     onProgress,
   }: DiscoverPagesOptions = {},
-): Promise<DiscoveredPage[]> {
-  const pages: DiscoveredPage[] = [];
+): Promise<void> {
   const visited = new Set();
   const userNames = new Map<string, Promise<string | undefined>>();
   let userInfoAvailable = true;
@@ -383,9 +380,6 @@ export async function discoverPages(
       onUnknownBlockUnresolved,
     );
     const discoveredPage = { ...metadata, markdown };
-    if (collectPages) {
-      pages.push(discoveredPage);
-    }
     await onPage?.(discoveredPage);
 
     const childIds: string[] = [];
@@ -408,5 +402,4 @@ export async function discoverPages(
   }
 
   await visit(rootPageId);
-  return pages;
 }

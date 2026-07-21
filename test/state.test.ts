@@ -7,19 +7,20 @@ import type { PageMetadata } from "../src/notion";
 import {
   beginIncrementalMirror,
   INDEX_FILENAME,
-  planPagePaths,
   planRootPaths,
-  reconcileMirror,
+  type ReconcileResult,
   ROOTS_INDEX_FILENAME,
 } from "../src/state";
 
 const rootPageId = "11111111111111111111111111111111";
 const childPageId = "22222222222222222222222222222222";
 
-function renderedPage(id: string, title: string, content = title): {
+interface RenderedPage {
   page: PageMetadata;
   content: string;
-} {
+}
+
+function renderedPage(id: string, title: string, content = title): RenderedPage {
   return {
     page: {
       id,
@@ -29,6 +30,24 @@ function renderedPage(id: string, title: string, content = title): {
     },
     content: `${content}\n`,
   };
+}
+
+async function mirror(
+  outputDir: string,
+  renderedPages: RenderedPage[],
+  options: { deleteOrphans?: boolean; now?: () => Date } = {},
+): Promise<ReconcileResult> {
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: options.deleteOrphans ?? true,
+    now: options.now,
+  });
+  for (const rendered of renderedPages) {
+    await writer.writePage(rendered);
+  }
+  return writer.finish();
 }
 
 async function temporaryDirectory(t: TestContext): Promise<string> {
@@ -68,13 +87,10 @@ test("persists each page and its check time before reconciliation finishes", asy
 
 test("preserves unseen indexed pages until reconciliation finishes", async (t) => {
   const outputDir = await temporaryDirectory(t);
-  await reconcileMirror({
-    outputDir,
-    rootPageId,
-    renderedPages: [renderedPage(rootPageId, "Root"), renderedPage(childPageId, "Child")],
-    filenameStrategy: "slug-and-id",
-    deleteOrphans: true,
-  });
+  await mirror(outputDir, [
+    renderedPage(rootPageId, "Root"),
+    renderedPage(childPageId, "Child"),
+  ]);
   const writer = await beginIncrementalMirror({
     outputDir,
     rootPageId,
@@ -106,13 +122,7 @@ test("writes deterministic files and preserves paths across title changes", asyn
   ];
 
   assert.deepEqual(
-    await reconcileMirror({
-      outputDir,
-      rootPageId,
-      renderedPages: initial,
-      filenameStrategy: "slug-and-id",
-      deleteOrphans: true,
-    }),
+    await mirror(outputDir, initial),
     { pagesExported: 2, pagesChanged: 2, pagesDeleted: 0 },
   );
 
@@ -122,26 +132,14 @@ test("writes deterministic files and preserves paths across title changes", asyn
   const childPath = initialIndex.pages[childPageId].path;
 
   assert.deepEqual(
-    await reconcileMirror({
-      outputDir,
-      rootPageId,
-      renderedPages: initial,
-      filenameStrategy: "slug-and-id",
-      deleteOrphans: true,
-    }),
+    await mirror(outputDir, initial),
     { pagesExported: 2, pagesChanged: 0, pagesDeleted: 0 },
   );
 
-  await reconcileMirror({
-    outputDir,
-    rootPageId,
-    renderedPages: [
-      renderedPage(rootPageId, "Root"),
-      renderedPage(childPageId, "Renamed child", "updated"),
-    ],
-    filenameStrategy: "slug-and-id",
-    deleteOrphans: true,
-  });
+  await mirror(outputDir, [
+    renderedPage(rootPageId, "Root"),
+    renderedPage(childPageId, "Renamed child", "updated"),
+  ]);
   const renamedIndex = JSON.parse(
     await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
   );
@@ -149,29 +147,20 @@ test("writes deterministic files and preserves paths across title changes", asyn
   assert.equal(await fs.readFile(path.join(outputDir, childPath), "utf8"), "updated\n");
 });
 
-test("plans stable paths before pages are rendered", async (t) => {
+test("allocates slug paths for new pages and keeps them across renames", async (t) => {
   const outputDir = await temporaryDirectory(t);
-  await reconcileMirror({
-    outputDir,
-    rootPageId,
-    renderedPages: [renderedPage(rootPageId, "Original")],
-    filenameStrategy: "slug-and-id",
-    deleteOrphans: true,
-  });
+  await mirror(outputDir, [renderedPage(rootPageId, "Original")]);
 
-  const pages = [
-    renderedPage(rootPageId, "Renamed").page,
-    renderedPage(childPageId, "Database task").page,
-  ];
-  const paths = await planPagePaths(
-    outputDir,
-    rootPageId,
-    pages,
-    "slug-and-id",
+  await mirror(outputDir, [
+    renderedPage(rootPageId, "Renamed"),
+    renderedPage(childPageId, "Database task"),
+  ]);
+
+  const index = JSON.parse(
+    await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
   );
-
-  assert.equal(paths[rootPageId], `original--${rootPageId.slice(0, 8)}.md`);
-  assert.equal(paths[childPageId], `database-task--${childPageId.slice(0, 8)}.md`);
+  assert.equal(index.pages[rootPageId].path, `original--${rootPageId.slice(0, 8)}.md`);
+  assert.equal(index.pages[childPageId].path, `database-task--${childPageId.slice(0, 8)}.md`);
 });
 
 test("preserves root directories across title and configuration changes", async (t) => {
@@ -212,22 +201,13 @@ test("rejects unsafe paths from a tampered root index", async (t) => {
 
 test("deletes only indexed orphan files when enabled", async (t) => {
   const outputDir = await temporaryDirectory(t);
-  await reconcileMirror({
-    outputDir,
-    rootPageId,
-    renderedPages: [renderedPage(rootPageId, "Root"), renderedPage(childPageId, "Child")],
-    filenameStrategy: "slug-and-id",
-    deleteOrphans: true,
-  });
+  await mirror(outputDir, [
+    renderedPage(rootPageId, "Root"),
+    renderedPage(childPageId, "Child"),
+  ]);
   await fs.writeFile(path.join(outputDir, "user-authored.md"), "keep\n");
 
-  const result = await reconcileMirror({
-    outputDir,
-    rootPageId,
-    renderedPages: [renderedPage(rootPageId, "Root")],
-    filenameStrategy: "slug-and-id",
-    deleteOrphans: true,
-  });
+  const result = await mirror(outputDir, [renderedPage(rootPageId, "Root")]);
 
   assert.equal(result.pagesDeleted, 1);
   assert.equal(await fs.readFile(path.join(outputDir, "user-authored.md"), "utf8"), "keep\n");
@@ -247,10 +227,9 @@ test("rejects unsafe paths from a tampered index", async (t) => {
   );
 
   await assert.rejects(
-    reconcileMirror({
+    beginIncrementalMirror({
       outputDir,
       rootPageId,
-      renderedPages: [],
       filenameStrategy: "slug-and-id",
       deleteOrphans: true,
     }),
