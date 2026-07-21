@@ -64,7 +64,13 @@ export interface MarkdownReference {
 }
 
 export interface DiscoverPagesOptions {
-  onPage?: (page: DiscoveredPage) => Promise<void> | void;
+  getCachedReferences?: (
+    page: PageMetadata,
+  ) => Promise<MarkdownReference[] | undefined> | MarkdownReference[] | undefined;
+  onPage?: (
+    page: DiscoveredPage,
+    references: MarkdownReference[],
+  ) => Promise<void> | void;
   onUnknownBlockUnresolved?: (blockId: string) => void;
   onUserInfoUnavailable?: () => void;
   onProgress?: (message: string) => void;
@@ -345,6 +351,7 @@ export async function discoverPages(
   notion: NotionClient,
   rootPageId: string,
   {
+    getCachedReferences,
     onPage,
     onUnknownBlockUnresolved,
     onUserInfoUnavailable,
@@ -365,46 +372,51 @@ export async function discoverPages(
     onProgress?.(`Retrieving page metadata for ${normalizedId}.`);
     const page = await notion.pages.retrieve({ page_id: normalizedId });
     const metadata = toPageMetadata(page);
-    const lastEditedById = getLastEditedById(page);
-    if (!metadata.lastEditedBy && lastEditedById) {
-      if (!userInfoAvailable) {
-        metadata.lastEditedBy = lastEditedById;
-      } else {
-        const name = userNames.get(lastEditedById) ?? retrieveUserName(
-          notion,
-          lastEditedById,
-        ).catch((error: unknown) => {
-          if (
-            APIResponseError.isAPIResponseError(error)
-            && (
-              error.code === APIErrorCode.RestrictedResource
-              || error.code === APIErrorCode.ObjectNotFound
-            )
-          ) {
-            if (error.code === APIErrorCode.RestrictedResource) {
-              userInfoAvailable = false;
-              onUserInfoUnavailable?.();
+    let references = await getCachedReferences?.(metadata);
+    if (references === undefined) {
+      const lastEditedById = getLastEditedById(page);
+      if (!metadata.lastEditedBy && lastEditedById) {
+        if (!userInfoAvailable) {
+          metadata.lastEditedBy = lastEditedById;
+        } else {
+          const name = userNames.get(lastEditedById) ?? retrieveUserName(
+            notion,
+            lastEditedById,
+          ).catch((error: unknown) => {
+            if (
+              APIResponseError.isAPIResponseError(error)
+              && (
+                error.code === APIErrorCode.RestrictedResource
+                || error.code === APIErrorCode.ObjectNotFound
+              )
+            ) {
+              if (error.code === APIErrorCode.RestrictedResource) {
+                userInfoAvailable = false;
+                onUserInfoUnavailable?.();
+              }
+              return undefined;
             }
-            return undefined;
-          }
-          throw error;
-        });
-        userNames.set(lastEditedById, name);
-        metadata.lastEditedBy = await name ?? lastEditedById;
+            throw error;
+          });
+          userNames.set(lastEditedById, name);
+          metadata.lastEditedBy = await name ?? lastEditedById;
+        }
       }
+      onProgress?.(`Retrieving Markdown for "${metadata.title}" (${normalizedId}).`);
+      const markdown = await retrieveCompleteMarkdown(
+        notion,
+        normalizedId,
+        onProgress,
+        onUnknownBlockUnresolved,
+      );
+      references = findMarkdownReferences(markdown);
+      await onPage?.({ ...metadata, markdown }, references);
+    } else {
+      onProgress?.(`Using cached Markdown references for "${metadata.title}" (${normalizedId}).`);
     }
-    onProgress?.(`Retrieving Markdown for "${metadata.title}" (${normalizedId}).`);
-    const markdown = await retrieveCompleteMarkdown(
-      notion,
-      normalizedId,
-      onProgress,
-      onUnknownBlockUnresolved,
-    );
-    const discoveredPage = { ...metadata, markdown };
-    await onPage?.(discoveredPage);
 
     const childIds: string[] = [];
-    for (const reference of findMarkdownReferences(markdown)) {
+    for (const reference of references) {
       if (reference.type === "page") {
         childIds.push(reference.id);
         continue;

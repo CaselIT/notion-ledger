@@ -43,6 +43,10 @@ export async function run(): Promise<void> {
     core.getInput("delete-orphans") || "true",
     "delete-orphans",
   );
+  const fullExport = parseBoolean(
+    core.getInput("full-export") || "false",
+    "full-export",
+  );
   const filenameStrategy = parseFilenameStrategy(
     core.getInput("filename-strategy") || "slug-and-id",
   );
@@ -89,25 +93,35 @@ export async function run(): Promise<void> {
     for (const rootPageId of rootPageIds) {
       log("info", `Discovering pages below Notion root ${rootPageId}.`);
       let writer: IncrementalMirrorWriter | undefined;
+      const ensureWriter = async (page: Parameters<IncrementalMirrorWriter["reusePage"]>[0]) => {
+        if (writer) {
+          return writer;
+        }
+        if (page.id !== rootPageId) {
+          throw new Error(`Notion root page ${rootPageId} was not discovered first.`);
+        }
+        const rootPaths = await planRootPaths(outputDir, [page]);
+        writer = await beginIncrementalMirror({
+          outputDir: path.join(outputDir, rootPaths[rootPageId]),
+          rootPageId,
+          filenameStrategy,
+          deleteOrphans,
+        });
+        activeWriter = writer;
+        return writer;
+      };
       await discoverPages(notion, rootPageId, {
         onProgress: (message) => log("debug", message),
-        onPage: async (page) => {
-          if (!writer) {
-            if (page.id !== rootPageId) {
-              throw new Error(`Notion root page ${rootPageId} was not discovered first.`);
-            }
-            const rootPaths = await planRootPaths(outputDir, [page]);
-            writer = await beginIncrementalMirror({
-              outputDir: path.join(outputDir, rootPaths[rootPageId]),
-              rootPageId,
-              filenameStrategy,
-              deleteOrphans,
-            });
-            activeWriter = writer;
-          }
-          await writer.writePage({
+        getCachedReferences: async (page) => {
+          const currentWriter = await ensureWriter(page);
+          return fullExport ? undefined : currentWriter.reusePage(page);
+        },
+        onPage: async (page, references) => {
+          const currentWriter = await ensureWriter(page);
+          await currentWriter.writePage({
             page,
             content: renderPage(page, page.markdown, addFrontmatter),
+            references,
           });
         },
         onUnknownBlockUnresolved: (blockId) => {

@@ -24,8 +24,8 @@ async function collectPages(
   const pages: DiscoveredPage[] = [];
   await discoverPages(notion, rootPageId, {
     ...options,
-    onPage: async (page) => {
-      await options.onPage?.(page);
+    onPage: async (page, references) => {
+      await options.onPage?.(page, references);
       pages.push(page);
     },
   });
@@ -215,6 +215,46 @@ test("streams each page through onPage in depth-first order", async () => {
   });
 
   assert.deepEqual(streamed, [rootId, childId]);
+});
+
+test("uses cached references while retrieving Markdown only for changed descendants", async () => {
+  const notion = createNotionMock();
+  const pages = await collectPages(notion, rootId, {
+    getCachedReferences: (page) => page.id === rootId
+      ? [{ type: "page", id: childId }]
+      : undefined,
+  });
+
+  assert.deepEqual(pages.map((page) => page.id), [childId]);
+  assert.deepEqual(notion.markdownRetrievals(), [childId]);
+  assert.equal(notion.userRetrievals(), 1);
+});
+
+test("queries inline databases found in cached references", async () => {
+  const notion = createNotionMock();
+  let databaseQueries = 0;
+  notion.databases.retrieve = async () => ({
+    object: "database",
+    data_sources: [{ id: "data-source-id", name: "Tasks" }],
+  });
+  notion.dataSources.query = async () => {
+    databaseQueries += 1;
+    return {
+      results: [{ object: "page", id: childId }],
+      has_more: false,
+      next_cursor: null,
+    };
+  };
+
+  const pages = await collectPages(notion, rootId, {
+    getCachedReferences: (page) => page.id === rootId
+      ? [{ type: "database", id: databaseId }]
+      : [],
+  });
+
+  assert.deepEqual(pages, []);
+  assert.deepEqual(notion.markdownRetrievals(), []);
+  assert.equal(databaseQueries, 1);
 });
 
 test("reports discovery progress when requested", async () => {

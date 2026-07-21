@@ -21,6 +21,10 @@ inputs:
     description: Delete indexed files no longer found below each configured root
     required: false
     default: "true"
+  full-export:
+    description: Re-export every page regardless of its indexed Notion edit timestamp
+    required: false
+    default: "false"
   filename-strategy:
     description: stable-id, slug-and-id, or title
     required: false
@@ -28,7 +32,7 @@ inputs:
 
 outputs:
   pages-exported:
-    description: Number of pages found and exported
+    description: Number of pages found and mirrored
   pages-changed:
     description: Number of Markdown files created or updated
   pages-deleted:

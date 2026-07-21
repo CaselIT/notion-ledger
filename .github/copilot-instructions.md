@@ -17,6 +17,7 @@
 	- `output-dir` (default `docs/notion`): repository-relative generated-file directory.
 	- `add-frontmatter` (default `true`): include generated Notion metadata.
 	- `delete-orphans` (default `true`): remove indexed pages no longer below each configured root.
+	- `full-export` (default `false`): re-export every page regardless of its indexed Notion edit timestamp.
 	- `filename-strategy` (default `slug-and-id`): `stable-id`, `slug-and-id`, or `title`.
 - Outputs: `pages-exported`, `pages-changed`, and `pages-deleted`.
 - The default initial filename is `slug(title)--short-page-id.md`. Once indexed, preserve that path across title changes regardless of filename strategy.
@@ -27,6 +28,7 @@
 - Allocate one stable title-and-ID directory and one mirror index per root. Preserve `.mirror-roots.json` so root title changes retain existing directories.
 - Keep generated page content and the mirror index deterministic, and avoid rewriting unchanged files. Do not record run timestamps or other volatile fields in generated Markdown or the mirror index, so an unchanged run produces no Git diff.
 - Preserve the `.mirror-index.json` mapping so title changes retain existing paths and Git history.
+- When `full-export` is false, trust Notion's page `last_edited_time` and reuse an existing generated file only when its indexed timestamp matches, the file exists, and cached traversal references are available. Existing indexes without cached references must fall back to exporting the page once. A full export bypasses reuse without changing stable paths.
 - Write each rendered page file before visiting the next page, but persist the mirror index only after traversal completes. Defer orphan deletion to that same point so an interrupted run retains the previous index and every file it references.
 - Add a page to the in-memory index only after its file is successfully written, so a page that fails to export is never indexed. If a run fails or is interrupted (SIGINT/SIGTERM), persist the in-memory index of successfully exported pages without deleting orphans, so the next run can resume from partial progress.
 - Export inline database rows as indexed Markdown files and link their titles from the parent database list using planned stable paths.
@@ -34,7 +36,7 @@
 - Removing a root from `root-pages` must not automatically delete its directory or root-index entry.
 - Use the official retrieve-page-Markdown API for content and child-reference discovery. Do not reconstruct page Markdown from block objects.
 - Discover child references by parsing the enhanced Markdown for `<page>` and `<database>` tags rather than walking the block tree. This grep-based traversal is deliberate: the block/children API approach was too slow at scale, so accept the coupling to the Markdown tag format as the intended trade-off.
-- Retrieve each page's Markdown once per run and reuse it for rendering. When Notion truncates a response, retrieve each reported unknown block subtree through the same official Markdown API and replace its placeholder in place. Resolve a self-referential page alias through the official block API, fetch its target title, and render it without traversing the target. Preserve other self-referential unresolved `<unknown>` placeholders with a visible warning. Traverse discovered page references depth-first; inline database rows continue to use the official database and data-source APIs.
+- Retrieve each page's Markdown at most once per run when its content or traversal references are not reusable, and reuse that response for rendering. Cache discovered page and database references in the mirror index so unchanged pages can still be traversed without another Markdown request. Query cached inline database references on every run. When Notion truncates a response, retrieve each reported unknown block subtree through the same official Markdown API and replace its placeholder in place. Resolve a self-referential page alias through the official block API, fetch its target title, and render it without traversing the target. Preserve other self-referential unresolved `<unknown>` placeholders with a visible warning. Traverse discovered page references depth-first; inline database rows continue to use the official database and data-source APIs.
 - Preserve source image/file URLs. Do not add asset downloading unless it is implemented end to end with stable names, URL rewriting, failure handling, size limits, tests, and documentation.
 
 ## Generated Page Format
@@ -64,6 +66,7 @@ Keep changes in the module that owns the behavior. Prefer small extensions of th
 ## Tests And Release Artifact
 
 - Use Node.js 24+ and the pinned dependencies in `package-lock.json`.
+- Prefer the scripts in `package.json` through `npm` over invoking `node`, `node_modules/.bin`, or underlying tools directly. Use a direct invocation only when no suitable package script exists for the required check.
 - Add focused regression tests for behavior changes, especially traversal, conversion output, path safety, rename stability, no-op runs, and orphan deletion.
 - Run `npm run typecheck` and `npm test` after source or test changes.
 - Run `npm run build` after any `src/**` change. GitHub Actions executes the checked-in `dist/index.cjs`; consumers do not install dependencies at runtime.

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import type { PageMetadata } from "../src/notion";
+import type { MarkdownReference, PageMetadata } from "../src/notion";
 import {
   beginIncrementalMirror,
   INDEX_FILENAME,
@@ -18,9 +18,15 @@ const childPageId = "22222222222222222222222222222222";
 interface RenderedPage {
   page: PageMetadata;
   content: string;
+  references: MarkdownReference[];
 }
 
-function renderedPage(id: string, title: string, content = title): RenderedPage {
+function renderedPage(
+  id: string,
+  title: string,
+  content = title,
+  references: RenderedPage["references"] = [],
+): RenderedPage {
   return {
     page: {
       id,
@@ -29,6 +35,7 @@ function renderedPage(id: string, title: string, content = title): RenderedPage 
       lastEditedAt: "2026-07-17T09:30:00.000Z",
     },
     content: `${content}\n`,
+    references,
   };
 }
 
@@ -81,7 +88,44 @@ test("writes page files eagerly but persists the index only on finish", async (t
   const entry = index.pages[rootPageId];
   assert.equal(entry.last_edited_at, "2026-07-17T09:30:00.000Z");
   assert.equal(entry.path, `root--${rootPageId.slice(0, 8)}.md`);
+  assert.deepEqual(entry.references, []);
   assert.ok(!("last_checked_at" in entry));
+});
+
+test("reuses an intact indexed page when its edit timestamp matches", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  const references = [{ type: "page" as const, id: childPageId }];
+  await mirror(outputDir, [renderedPage(rootPageId, "Root", "Root", references)]);
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+
+  assert.deepEqual(
+    await writer.reusePage(renderedPage(rootPageId, "Root").page),
+    references,
+  );
+  assert.deepEqual(
+    await writer.finish(),
+    { pagesExported: 1, pagesChanged: 0, pagesDeleted: 0 },
+  );
+});
+
+test("does not reuse an indexed page when its generated file is missing", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  await mirror(outputDir, [renderedPage(rootPageId, "Root")]);
+  const index = JSON.parse(await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"));
+  await fs.rm(path.join(outputDir, index.pages[rootPageId].path));
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+
+  assert.equal(await writer.reusePage(renderedPage(rootPageId, "Root").page), undefined);
 });
 
 test("preserves unseen indexed pages until reconciliation finishes", async (t) => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { FilenameStrategy } from "./inputs";
-import type { PageMetadata } from "./notion";
+import type { MarkdownReference, PageMetadata } from "./notion";
 import { allocatePagePath, resolveIndexedPath, slugTitle } from "./paths";
 
 export const INDEX_FILENAME = ".mirror-index.json";
@@ -12,6 +12,7 @@ interface MirrorIndexEntry {
   path: string;
   title: string;
   last_edited_at?: string;
+  references?: MarkdownReference[];
 }
 
 interface MirrorIndex {
@@ -28,6 +29,7 @@ interface RootIndex {
 interface RenderedPage {
   page: PageMetadata;
   content: string;
+  references: MarkdownReference[];
 }
 
 interface IncrementalMirrorOptions {
@@ -38,6 +40,7 @@ interface IncrementalMirrorOptions {
 }
 
 export interface IncrementalMirrorWriter {
+  reusePage(page: PageMetadata): Promise<MarkdownReference[] | undefined>;
   writePage(renderedPage: RenderedPage): Promise<boolean>;
   persist(): Promise<void>;
   finish(): Promise<ReconcileResult>;
@@ -104,6 +107,19 @@ function parseIndex(value: unknown, indexPath: string, rootPageId: string): Mirr
       || typeof entry.path !== "string"
       || !("title" in entry)
       || typeof entry.title !== "string"
+      || ("last_edited_at" in entry && typeof entry.last_edited_at !== "string")
+      || (
+        "references" in entry
+        && (
+          !Array.isArray(entry.references)
+          || entry.references.some((reference: unknown) => (
+            !isRecord(reference)
+            || (reference.type !== "page" && reference.type !== "database")
+            || typeof reference.id !== "string"
+            || !/^[0-9a-f]{32}$/.test(reference.id)
+          ))
+        )
+      )
     ) {
       throw new Error("Mirror index contains an invalid page entry.");
     }
@@ -234,7 +250,26 @@ export async function beginIncrementalMirror({
   let finished = false;
 
   return {
-    async writePage({ page, content }): Promise<boolean> {
+    async reusePage(page): Promise<MarkdownReference[] | undefined> {
+      if (finished) {
+        throw new Error("Cannot reuse a page after mirror reconciliation is complete.");
+      }
+      const entry = index.pages[page.id];
+      if (
+        !entry
+        || entry.last_edited_at !== page.lastEditedAt
+        || !entry.references
+        || !await pathExists(resolveIndexedPath(outputDir, entry.path))
+      ) {
+        return undefined;
+      }
+      entry.title = page.title;
+      seen.add(page.id);
+      pagesExported += 1;
+      return entry.references.map((reference) => ({ ...reference }));
+    },
+
+    async writePage({ page, content, references }): Promise<boolean> {
       if (finished) {
         throw new Error("Cannot write a page after mirror reconciliation is complete.");
       }
@@ -246,6 +281,7 @@ export async function beginIncrementalMirror({
         path: pagePath,
         title: page.title,
         last_edited_at: page.lastEditedAt,
+        references,
       };
       seen.add(page.id);
       pagesExported += 1;

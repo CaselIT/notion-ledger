@@ -71,6 +71,7 @@ Staging with `git add --all` before `git diff --cached --quiet` is required so n
 | `output-dir` | No | `docs/notion` | Repository-relative output directory. The repository root and paths outside the workspace are rejected. |
 | `add-frontmatter` | No | `true` | Include YAML source metadata in each Markdown file. |
 | `delete-orphans` | No | `true` | Delete indexed mirror files for pages no longer found below the root. |
+| `full-export` | No | `false` | Re-export every page instead of reusing files whose indexed Notion edit timestamp is unchanged. |
 | `filename-strategy` | No | `slug-and-id` | Initial path strategy: `stable-id`, `slug-and-id`, or `title`. |
 
 Boolean inputs accept only `true` or `false` (case-insensitive).
@@ -79,7 +80,7 @@ Boolean inputs accept only `true` or `false` (case-insensitive).
 
 | Output | Description |
 | --- | --- |
-| `pages-exported` | Pages discovered and rendered during this run. |
+| `pages-exported` | Pages discovered and mirrored during this run, including reused files. |
 | `pages-changed` | Markdown files created or whose content changed. |
 | `pages-deleted` | Indexed orphan Markdown files deleted. |
 
@@ -96,11 +97,13 @@ docs/notion/
     pricing-governance--12345678.md
 ```
 
-`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` from Notion. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
+`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` and discovered page/database references from Notion. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
 
 Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are omitted from both generated pages and the mirror index, so an unchanged run produces no Git diff.
 
-Pages are rendered and persisted as they are discovered rather than buffered until the complete tree has loaded. The mirror index is updated after each page write, making completed work durable during long runs. Indexed pages not encountered in the current run remain untouched until discovery finishes successfully; only then can orphan cleanup remove them.
+By default, the Action retrieves metadata for every discovered page and trusts Notion's `last_edited_time`. When it exactly matches the indexed value, the generated file still exists, and cached references are available, the Action skips that page's Markdown retrieval and rendering. Cached page references preserve depth-first traversal, while cached inline database references are queried live on every run so row additions and removals are still discovered. Legacy indexes without cached references populate them during one ordinary export. Set `full-export: "true"` to bypass timestamp reuse for a run.
+
+Pages that require rendering are persisted as they are discovered rather than buffered until the complete tree has loaded. The in-memory mirror index is updated after each successful page write. It is persisted after traversal completes or when the existing failure/signal handler saves partial progress. Indexed pages not encountered in the current run remain untouched until discovery finishes successfully; only then can orphan cleanup remove them.
 
 With `delete-orphans: true`, only files recorded in each configured root's validated index are deleted. User-authored files in `output-dir` and every file outside it are left alone. Removing a root from `root-pages` does not delete its directory or root-index entry. With deletion disabled, prior orphan entries and files remain in the page index so a page that returns keeps its original path.
 
@@ -142,6 +145,7 @@ On windows in powershell:
 [Environment]::SetEnvironmentVariable('INPUT_OUTPUT-DIR', 'docs/notion-local-test', 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_ADD-FRONTMATTER', 'true', 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_DELETE-ORPHANS', 'false', 'Process')
+[Environment]::SetEnvironmentVariable('INPUT_FULL-EXPORT', 'false', 'Process')
 $env:RUNNER_DEBUG = '1'
 $env:GITHUB_WORKSPACE = (Get-Location).Path
 
@@ -159,6 +163,7 @@ env \
   'INPUT_OUTPUT-DIR'='docs/notion-local-test' \
   'INPUT_ADD-FRONTMATTER'='true' \
   'INPUT_DELETE-ORPHANS'='false' \
+  'INPUT_FULL-EXPORT'='false' \
   npm run mirror:local
 ```
 
