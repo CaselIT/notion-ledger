@@ -39,6 +39,7 @@ interface IncrementalMirrorOptions {
 
 export interface IncrementalMirrorWriter {
   writePage(renderedPage: RenderedPage): Promise<boolean>;
+  persist(): Promise<void>;
   finish(): Promise<ReconcileResult>;
 }
 
@@ -252,6 +253,10 @@ export async function beginIncrementalMirror({
         pagesChanged += 1;
       }
       return changed;
+    },
+
+    async persist(): Promise<void> {
+      await writeIfChanged(path.join(outputDir, INDEX_FILENAME), serializeIndex(index));
     },
 
     async finish(): Promise<ReconcileResult> {

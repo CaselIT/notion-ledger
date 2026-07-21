@@ -28,6 +28,7 @@
 - Keep generated page content and the mirror index deterministic, and avoid rewriting unchanged files. Do not record run timestamps or other volatile fields in generated Markdown or the mirror index, so an unchanged run produces no Git diff.
 - Preserve the `.mirror-index.json` mapping so title changes retain existing paths and Git history.
 - Write each rendered page file before visiting the next page, but persist the mirror index only after traversal completes. Defer orphan deletion to that same point so an interrupted run retains the previous index and every file it references.
+- Add a page to the in-memory index only after its file is successfully written, so a page that fails to export is never indexed. If a run fails or is interrupted (SIGINT/SIGTERM), persist the in-memory index of successfully exported pages without deleting orphans, so the next run can resume from partial progress.
 - Export inline database rows as indexed Markdown files and link their titles from the parent database list using planned stable paths.
 - Orphan cleanup may delete only validated files recorded in the mirror index. Never remove user-authored files or files outside `output-dir`.
 - Removing a root from `root-pages` must not automatically delete its directory or root-index entry.

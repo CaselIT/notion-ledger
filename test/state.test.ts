@@ -113,6 +113,57 @@ test("preserves unseen indexed pages until reconciliation finishes", async (t) =
   await assert.rejects(fs.access(path.join(outputDir, childPath)));
 });
 
+test("persist saves partial progress without deleting orphans", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  await mirror(outputDir, [
+    renderedPage(rootPageId, "Root"),
+    renderedPage(childPageId, "Child"),
+  ]);
+
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+  await writer.writePage(renderedPage(rootPageId, "Root", "Updated"));
+  await writer.persist();
+
+  const index = JSON.parse(
+    await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
+  );
+  // The re-exported root and the not-yet-visited child both remain indexed.
+  assert.ok(index.pages[rootPageId]);
+  assert.ok(index.pages[childPageId]);
+  // The unseen child file is preserved because persist skips orphan deletion.
+  assert.equal(
+    await fs.readFile(path.join(outputDir, index.pages[childPageId].path), "utf8"),
+    "Child\n",
+  );
+});
+
+test("does not index a page whose file write fails", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  // Occupy the page's target path with a directory so the file write fails.
+  await fs.mkdir(path.join(outputDir, `root--${rootPageId.slice(0, 8)}.md`), {
+    recursive: true,
+  });
+
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+  await assert.rejects(writer.writePage(renderedPage(rootPageId, "Root")));
+  await writer.persist();
+
+  const index = JSON.parse(
+    await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
+  );
+  assert.equal(index.pages[rootPageId], undefined);
+});
+
 test("writes deterministic files and preserves paths across title changes", async (t) => {
   const outputDir = await temporaryDirectory(t);
   const initial = [
