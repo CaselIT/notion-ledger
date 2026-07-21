@@ -3,18 +3,23 @@ import test from "node:test";
 import { APIErrorCode, APIResponseError } from "@notionhq/client";
 import {
   discoverPages,
-  findChildPageIds,
+  findMarkdownReferences,
   queryInlineDatabaseRows,
 } from "../src/notion";
 
 const rootId = "11111111111111111111111111111111";
 const childId = "22222222222222222222222222222222";
-const nestedBlockId = "33333333-3333-3333-3333-333333333333";
+const databaseId = "33333333333333333333333333333333";
+const unknownBlockId = "44444444444444444444444444444444";
+const nestedUnknownBlockId = "55555555555555555555555555555555";
+const aliasTargetId = "66666666666666666666666666666666";
 
 function createNotionMock(): Parameters<typeof discoverPages>[0] & {
   userRetrievals: () => number;
+  markdownRetrievals: () => string[];
 } {
   let userRetrievals = 0;
+  const markdownRetrievals: string[] = [];
   const pages: Record<string, unknown> = {
     [rootId]: {
       object: "page",
@@ -46,8 +51,22 @@ function createNotionMock(): Parameters<typeof discoverPages>[0] & {
 
   const mock = {
     userRetrievals: () => userRetrievals,
+    markdownRetrievals: () => markdownRetrievals,
+    blocks: {
+      retrieve: async () => ({ object: "block", type: "unsupported" }),
+    },
     pages: {
       retrieve: async ({ page_id: pageId }: { page_id: string }) => pages[pageId],
+      retrieveMarkdown: async ({ page_id: pageId }: { page_id: string }) => {
+        markdownRetrievals.push(pageId);
+        return {
+          markdown: pageId === rootId
+            ? `<details>\n<summary>Pages</summary>\n\t<page url="https://app.notion.com/p/${childId}">Child</page>\n</details>`
+            : "",
+          truncated: false,
+          unknown_block_ids: [],
+        };
+      },
     },
     databases: {
       retrieve: async () => ({ object: "database", data_sources: [] }),
@@ -59,40 +78,6 @@ function createNotionMock(): Parameters<typeof discoverPages>[0] & {
       retrieve: async ({ user_id: userId }: { user_id: string }) => {
         userRetrievals += 1;
         return { object: "user", id: userId, name: "Editor" };
-      },
-    },
-    blocks: {
-      children: {
-        list: async ({
-          block_id: blockId,
-          start_cursor: cursor,
-        }: {
-          block_id: string;
-          start_cursor?: string;
-        }) => {
-          if (blockId === rootId && !cursor) {
-            return {
-              results: [{ id: "paragraph", type: "paragraph", has_children: false }],
-              has_more: true,
-              next_cursor: "page-2",
-            };
-          }
-          if (blockId === rootId && cursor === "page-2") {
-            return {
-              results: [{ id: nestedBlockId, type: "toggle", has_children: true }],
-              has_more: false,
-              next_cursor: null,
-            };
-          }
-          if (blockId === nestedBlockId) {
-            return {
-              results: [{ id: childId, type: "child_page", has_children: true }],
-              has_more: false,
-              next_cursor: null,
-            };
-          }
-          return { results: [], has_more: false, next_cursor: null };
-        },
       },
     },
   };
@@ -111,8 +96,19 @@ function restrictedUserInformationError(): APIResponseError {
   });
 }
 
-test("finds child pages inside nested blocks and across pagination", async () => {
-  assert.deepEqual(await findChildPageIds(createNotionMock(), rootId), [childId]);
+test("finds ordered page and database references in enhanced Markdown", () => {
+  const markdown = [
+    `<page url="https://app.notion.com/p/${childId}">Child</page>`,
+    "```html",
+    `<page url="https://app.notion.com/p/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">Example</page>`,
+    "```",
+    `\t<database inline="true" url="https://app.notion.com/p/${databaseId}">Tasks</database>`,
+  ].join("\n");
+
+  assert.deepEqual(findMarkdownReferences(markdown), [
+    { type: "page", id: childId },
+    { type: "database", id: databaseId },
+  ]);
 });
 
 test("queries all pages in an inline database", async () => {
@@ -140,10 +136,12 @@ test("queries all pages in an inline database", async () => {
 
 test("discovers inline database rows as child pages", async () => {
   const notion = createNotionMock();
-  notion.blocks.children.list = async () => ({
-    results: [{ id: "database-id", type: "child_database", has_children: false }],
-    has_more: false,
-    next_cursor: null,
+  notion.pages.retrieveMarkdown = async ({ page_id: pageId }) => ({
+    markdown: pageId === rootId
+      ? `<database url="https://app.notion.com/p/${databaseId}" inline="true">Tasks</database>`
+      : "",
+    truncated: false,
+    unknown_block_ids: [],
   });
   notion.databases.retrieve = async () => ({
     object: "database",
@@ -155,7 +153,10 @@ test("discovers inline database rows as child pages", async () => {
     next_cursor: null,
   });
 
-  assert.deepEqual(await findChildPageIds(notion, rootId), [childId]);
+  assert.deepEqual(
+    (await discoverPages(notion, rootId)).map((page) => page.id),
+    [rootId, childId],
+  );
 });
 
 test("discovers root and descendant metadata", async () => {
@@ -171,6 +172,21 @@ test("discovers root and descendant metadata", async () => {
   assert.equal(pages[0].lastEditedBy, "Editor");
   assert.equal(pages[1].lastEditedBy, "Editor");
   assert.equal(notion.userRetrievals(), 1);
+  assert.deepEqual(notion.markdownRetrievals(), [rootId, childId]);
+  assert.match(pages[0].markdown, /<page /);
+});
+
+test("streams pages before descending without retaining them", async () => {
+  const streamed: string[] = [];
+  const pages = await discoverPages(createNotionMock(), rootId, {
+    collectPages: false,
+    onPage: async (page) => {
+      streamed.push(page.id);
+    },
+  });
+
+  assert.deepEqual(pages, []);
+  assert.deepEqual(streamed, [rootId, childId]);
 });
 
 test("reports discovery progress when requested", async () => {
@@ -181,10 +197,152 @@ test("reports discovery progress when requested", async () => {
   });
 
   assert.ok(progress.includes(`Retrieving page metadata for ${rootId}.`));
-  assert.ok(progress.includes(`Listing child blocks for ${rootId} (batch 1).`));
-  assert.ok(progress.includes(`Received 1 child block(s) for ${rootId}.`));
+  assert.ok(progress.includes(`Retrieving Markdown for "Root" (${rootId}).`));
   assert.ok(progress.includes(`Discovered 1 child page(s) below ${rootId}.`));
   assert.ok(progress.includes(`Retrieving page metadata for ${childId}.`));
+});
+
+test("retrieves and inserts truncated Markdown subtrees", async () => {
+  const notion = createNotionMock();
+  notion.pages.retrieveMarkdown = async ({ page_id: pageId }) => {
+    if (pageId === rootId) {
+      return {
+        markdown: [
+          "Before",
+          `\t<unknown url=\"https://app.notion.com/p/${rootId}#${unknownBlockId}\" alt=\"toggle\"/>`,
+          "After",
+        ].join("\n"),
+        truncated: true,
+        unknown_block_ids: [unknownBlockId],
+      };
+    }
+    if (pageId === unknownBlockId) {
+      return {
+        markdown: [
+          "Recovered",
+          `\t<page url=\"https://app.notion.com/p/${childId}\">Child</page>`,
+        ].join("\n"),
+        truncated: false,
+        unknown_block_ids: [],
+      };
+    }
+    return { markdown: "", truncated: false, unknown_block_ids: [] };
+  };
+
+  const progress: string[] = [];
+  const pages = await discoverPages(notion, rootId, {
+    onProgress: (message) => progress.push(message),
+  });
+
+  assert.deepEqual(
+    pages.map((page) => page.id),
+    [rootId, childId],
+  );
+  assert.equal(
+    pages[0].markdown,
+    [
+      "Before",
+      "\tRecovered",
+      `\t\t<page url=\"https://app.notion.com/p/${childId}\">Child</page>`,
+      "After",
+    ].join("\n"),
+  );
+  assert.ok(progress.includes(`Retrieving incomplete Markdown subtree ${unknownBlockId}.`));
+});
+
+test("recovers multiple recursively truncated subtrees in place", async () => {
+  const notion = createNotionMock();
+  notion.pages.retrieveMarkdown = async ({ page_id: pageId }) => {
+    if (pageId === rootId) {
+      return {
+        markdown: [
+          `<unknown url="https://app.notion.com/p/${rootId}#${unknownBlockId}"/>`,
+          `<unknown url="https://app.notion.com/p/${rootId}#${nestedUnknownBlockId}"/>`,
+        ].join("\n"),
+        truncated: true,
+        unknown_block_ids: [nestedUnknownBlockId, unknownBlockId],
+      };
+    }
+    if (pageId === unknownBlockId) {
+      return { markdown: "First\n", truncated: false, unknown_block_ids: [] };
+    }
+    if (pageId === nestedUnknownBlockId) {
+      return {
+        markdown: `Nested\n\t<unknown url="https://app.notion.com/p/${nestedUnknownBlockId}#${databaseId}"/>`,
+        truncated: true,
+        unknown_block_ids: [databaseId],
+      };
+    }
+    if (pageId === databaseId) {
+      return { markdown: "Recovered nested", truncated: false, unknown_block_ids: [] };
+    }
+    return { markdown: "", truncated: false, unknown_block_ids: [] };
+  };
+
+  const pages = await discoverPages(notion, rootId);
+
+  assert.equal(
+    pages[0].markdown,
+    ["First", "Nested", "\tRecovered nested"].join("\n"),
+  );
+});
+
+test("preserves self-referential unknown subtrees", async () => {
+  const notion = createNotionMock();
+  const placeholder = `<unknown url="https://app.notion.com/p/${rootId}#${unknownBlockId}" alt="unsupported"/>`;
+  notion.pages.retrieveMarkdown = async ({ page_id: pageId }) => ({
+    markdown: pageId === rootId ? `Before\n${placeholder}\nAfter` : placeholder,
+    truncated: true,
+    unknown_block_ids: [unknownBlockId],
+  });
+  const unresolved: string[] = [];
+
+  const pages = await discoverPages(notion, rootId, {
+    onUnknownBlockUnresolved: (blockId) => unresolved.push(blockId),
+  });
+
+  assert.equal(pages[0].markdown, `Before\n${placeholder}\nAfter`);
+  assert.deepEqual(unresolved, [unknownBlockId]);
+});
+
+test("renders page aliases outside the current root without traversing them", async () => {
+  const notion = createNotionMock();
+  const placeholder = `<unknown url="https://app.notion.com/p/${rootId}#${unknownBlockId}" alt="alias"/>`;
+  notion.pages.retrieveMarkdown = async ({ page_id: pageId }) => {
+    notion.markdownRetrievals().push(pageId);
+    return {
+      markdown: placeholder,
+      truncated: true,
+      unknown_block_ids: [unknownBlockId],
+    };
+  };
+  const retrievePage = notion.pages.retrieve;
+  notion.pages.retrieve = async ({ page_id: pageId }) => pageId === aliasTargetId
+    ? {
+      object: "page",
+      id: aliasTargetId,
+      url: `https://notion.so/P-L-Configuration-${aliasTargetId}`,
+      last_edited_time: "2026-07-17T10:00:00.000Z",
+      properties: {
+        title: { type: "title", title: [{ plain_text: "P&L Configuration" }] },
+      },
+    }
+    : retrievePage({ page_id: pageId });
+  notion.blocks.retrieve = async ({ block_id: blockId }) => ({
+    object: "block",
+    id: blockId,
+    type: "link_to_page",
+    link_to_page: { type: "page_id", page_id: aliasTargetId },
+  });
+
+  const pages = await discoverPages(notion, rootId);
+
+  assert.deepEqual(pages.map((page) => page.id), [rootId]);
+  assert.equal(
+    pages[0].markdown,
+    `<page url="https://notion.so/P-L-Configuration-${aliasTargetId}" outside-current-root="true">P&amp;L Configuration (outside current root)</page>`,
+  );
+  assert.deepEqual(notion.markdownRetrievals(), [rootId, unknownBlockId]);
 });
 
 test("omits editor names when user information is unavailable", async () => {

@@ -12,6 +12,7 @@ interface MirrorIndexEntry {
   path: string;
   title: string;
   last_edited_at?: string;
+  last_checked_at?: string;
 }
 
 interface MirrorIndex {
@@ -37,6 +38,19 @@ interface ReconcileOptions {
   pagePaths?: Record<string, string>;
   filenameStrategy: FilenameStrategy;
   deleteOrphans: boolean;
+}
+
+interface IncrementalMirrorOptions {
+  outputDir: string;
+  rootPageId: string;
+  filenameStrategy: FilenameStrategy;
+  deleteOrphans: boolean;
+  now?: () => Date;
+}
+
+export interface IncrementalMirrorWriter {
+  writePage(renderedPage: RenderedPage, plannedPath?: string): Promise<boolean>;
+  finish(): Promise<ReconcileResult>;
 }
 
 export interface ReconcileResult {
@@ -231,6 +245,74 @@ export async function planPagePaths(
   return pagePaths;
 }
 
+export async function beginIncrementalMirror({
+  outputDir,
+  rootPageId,
+  filenameStrategy,
+  deleteOrphans,
+  now = () => new Date(),
+}: IncrementalMirrorOptions): Promise<IncrementalMirrorWriter> {
+  await fs.mkdir(outputDir, { recursive: true });
+  const index = await readIndex(outputDir, rootPageId);
+  const usedPaths = new Set(
+    Object.values(index.pages).map((entry) => entry.path.toLowerCase()),
+  );
+  const seen = new Set<string>();
+  let pagesExported = 0;
+  let pagesChanged = 0;
+  let finished = false;
+
+  return {
+    async writePage({ page, content }, plannedPath): Promise<boolean> {
+      if (finished) {
+        throw new Error("Cannot write a page after mirror reconciliation is complete.");
+      }
+      const pagePath = plannedPath
+        ?? index.pages[page.id]?.path
+        ?? allocatePagePath(page, filenameStrategy, usedPaths);
+      if (index.pages[page.id] && index.pages[page.id].path !== pagePath) {
+        throw new Error(`Planned path does not preserve the indexed path for page ${page.id}.`);
+      }
+      const targetPath = resolveIndexedPath(outputDir, pagePath);
+      const changed = await writeIfChanged(targetPath, content);
+      index.pages[page.id] = {
+        path: pagePath,
+        title: page.title,
+        last_edited_at: page.lastEditedAt,
+        last_checked_at: now().toISOString(),
+      };
+      seen.add(page.id);
+      pagesExported += 1;
+      if (changed) {
+        pagesChanged += 1;
+      }
+      await writeIfChanged(path.join(outputDir, INDEX_FILENAME), serializeIndex(index));
+      return changed;
+    },
+
+    async finish(): Promise<ReconcileResult> {
+      if (finished) {
+        throw new Error("Mirror reconciliation is already complete.");
+      }
+      finished = true;
+      let pagesDeleted = 0;
+      for (const [pageId, entry] of Object.entries(index.pages)) {
+        if (seen.has(pageId) || !deleteOrphans) {
+          continue;
+        }
+        const orphanPath = resolveIndexedPath(outputDir, entry.path);
+        if (await pathExists(orphanPath)) {
+          await fs.rm(orphanPath);
+          pagesDeleted += 1;
+        }
+        delete index.pages[pageId];
+      }
+      await writeIfChanged(path.join(outputDir, INDEX_FILENAME), serializeIndex(index));
+      return { pagesExported, pagesChanged, pagesDeleted };
+    },
+  };
+}
+
 export async function reconcileMirror({
   outputDir,
   rootPageId,
@@ -239,55 +321,17 @@ export async function reconcileMirror({
   filenameStrategy,
   deleteOrphans,
 }: ReconcileOptions): Promise<ReconcileResult> {
-  await fs.mkdir(outputDir, { recursive: true });
-  const previous = await readIndex(outputDir, rootPageId);
-  const next = emptyIndex(rootPageId);
-  const usedPaths = new Set(
-    Object.values(previous.pages).map((entry) => entry.path.toLowerCase()),
-  );
-  let pagesChanged = 0;
-  let pagesDeleted = 0;
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy,
+    deleteOrphans,
+  });
 
   for (const { page, content } of [...renderedPages].sort(
     (left, right) => left.page.id.localeCompare(right.page.id),
   )) {
-    const pagePath = pagePaths?.[page.id]
-      ?? previous.pages[page.id]?.path
-      ?? allocatePagePath(page, filenameStrategy, usedPaths);
-    if (previous.pages[page.id] && previous.pages[page.id].path !== pagePath) {
-      throw new Error(`Planned path does not preserve the indexed path for page ${page.id}.`);
-    }
-    const targetPath = resolveIndexedPath(outputDir, pagePath);
-    if (await writeIfChanged(targetPath, content)) {
-      pagesChanged += 1;
-    }
-    next.pages[page.id] = {
-      path: pagePath,
-      title: page.title,
-      last_edited_at: page.lastEditedAt,
-    };
+    await writer.writePage({ page, content }, pagePaths?.[page.id]);
   }
-
-  for (const [pageId, entry] of Object.entries(previous.pages)) {
-    if (next.pages[pageId]) {
-      continue;
-    }
-    if (!deleteOrphans) {
-      next.pages[pageId] = entry;
-      continue;
-    }
-
-    const orphanPath = resolveIndexedPath(outputDir, entry.path);
-    if (await pathExists(orphanPath)) {
-      await fs.rm(orphanPath);
-      pagesDeleted += 1;
-    }
-  }
-
-  await writeIfChanged(path.join(outputDir, INDEX_FILENAME), serializeIndex(next));
-  return {
-    pagesExported: renderedPages.length,
-    pagesChanged,
-    pagesDeleted,
-  };
+  return writer.finish();
 }

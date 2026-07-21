@@ -5,6 +5,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { PageMetadata } from "../src/notion";
 import {
+  beginIncrementalMirror,
   INDEX_FILENAME,
   planPagePaths,
   planRootPaths,
@@ -35,6 +36,67 @@ async function temporaryDirectory(t: TestContext): Promise<string> {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   return directory;
 }
+
+test("persists each page and its check time before reconciliation finishes", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  const checkedAt = new Date("2026-07-21T12:34:56.000Z");
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+    now: () => checkedAt,
+  });
+
+  await writer.writePage(renderedPage(rootPageId, "Root"));
+
+  const index = JSON.parse(
+    await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
+  );
+  const entry = index.pages[rootPageId];
+  assert.equal(entry.last_edited_at, "2026-07-17T09:30:00.000Z");
+  assert.equal(entry.last_checked_at, checkedAt.toISOString());
+  assert.equal(
+    await fs.readFile(path.join(outputDir, entry.path), "utf8"),
+    "Root\n",
+  );
+  assert.deepEqual(
+    await writer.finish(),
+    { pagesExported: 1, pagesChanged: 1, pagesDeleted: 0 },
+  );
+});
+
+test("preserves unseen indexed pages until reconciliation finishes", async (t) => {
+  const outputDir = await temporaryDirectory(t);
+  await reconcileMirror({
+    outputDir,
+    rootPageId,
+    renderedPages: [renderedPage(rootPageId, "Root"), renderedPage(childPageId, "Child")],
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+  const writer = await beginIncrementalMirror({
+    outputDir,
+    rootPageId,
+    filenameStrategy: "slug-and-id",
+    deleteOrphans: true,
+  });
+
+  await writer.writePage(renderedPage(rootPageId, "Root"));
+
+  const partialIndex = JSON.parse(
+    await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
+  );
+  const childPath = partialIndex.pages[childPageId].path;
+  assert.ok(partialIndex.pages[childPageId]);
+  assert.equal(await fs.readFile(path.join(outputDir, childPath), "utf8"), "Child\n");
+
+  assert.deepEqual(
+    await writer.finish(),
+    { pagesExported: 1, pagesChanged: 0, pagesDeleted: 1 },
+  );
+  await assert.rejects(fs.access(path.join(outputDir, childPath)));
+});
 
 test("writes deterministic files and preserves paths across title changes", async (t) => {
   const outputDir = await temporaryDirectory(t);

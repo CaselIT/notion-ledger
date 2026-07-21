@@ -10,7 +10,7 @@ Notion Ledger is a Node.js 24 GitHub Action that mirrors selected Notion page tr
 4. Store the selected root page URLs or IDs in a newline-delimited repository variable such as `NOTION_MIRROR_ROOT_PAGES`.
 5. Use a private target repository and protect its default branch as appropriate for the designated mirror bot.
 
-Each configured root page, its descendant `child_page` blocks, and rows of inline databases encountered in that tree are exported. Other pages accessible to the integration are not searched or exported.
+Each configured root page, descendant `<page>` references returned by Notion's enhanced Markdown, and rows of inline databases referenced in that tree are exported. Other pages accessible to the integration are not searched or exported.
 
 ## Workflow
 
@@ -96,27 +96,25 @@ docs/notion/
     pricing-governance--12345678.md
 ```
 
-`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
+`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` from Notion plus the Action's `last_checked_at`. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
 
-Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are intentionally omitted, so rerunning without source changes produces no file changes.
+Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are omitted from generated pages, so their contents do not change unless their rendered source data changes. The mirror index's `last_checked_at` intentionally advances whenever a page is checked.
+
+Pages are rendered and persisted as they are discovered rather than buffered until the complete tree has loaded. The mirror index is updated after each page write, making completed work durable during long runs. Indexed pages not encountered in the current run remain untouched until discovery finishes successfully; only then can orphan cleanup remove them.
 
 With `delete-orphans: true`, only files recorded in each configured root's validated index are deleted. User-authored files in `output-dir` and every file outside it are left alone. Removing a root from `root-pages` does not delete its directory or root-index entry. With deletion disabled, prior orphan entries and files remain in the page index so a page that returns keeps its original path.
 
 ## Markdown Behavior
 
-Conversion is delegated to [`notion-to-md`](https://github.com/souvikinator/notion-to-md) using the official Notion API. It handles rich text, headings, lists, nested GFM task lists, quotes, dividers, code blocks, links, images, files, callouts, tables, toggles, synced blocks, and columns within Markdown's limits.
+Content is retrieved through Notion's official [Markdown API](https://developers.notion.com/reference/retrieve-page-markdown). It returns Notion's enhanced Markdown format, which supports rich text, headings, lists, nested task lists, quotes, dividers, code blocks, links, media, callouts, tables, toggles, synced blocks, and columns in one request for most pages.
 
 Known Milestone 1 limitations:
 
-- Notion formatting is not losslessly reversible. Callouts and tables use Markdown/HTML approximations, toggles use HTML details blocks, and columns are flattened into reading order.
-- Child pages are deliberately excluded from a parent's Markdown body and exported as their own indexed files.
-- Inline database rows are rendered in place and exported as stable Markdown files.
-  - Row titles link to their exported files.
-  - Checkbox properties and standard task statuses (`Done`, `Complete`, or `Completed`) become GFM task markers.
-  - Date properties are included as item details.
-  - Views, filters, sorts, and other database properties are not reproduced.
+- Enhanced Markdown uses Notion-specific XML-like tags for structures that standard Markdown cannot represent, including callouts, tables, toggles, columns, child pages, and inline databases.
+- Child pages and inline databases appear in parent content as `<page>` and `<database>` references while their descendant pages and database rows are exported as their own indexed files. A Notion page alias is rendered as a titled `<page>` reference marked `outside-current-root="true"`; its target is not traversed or exported from that root, avoiding duplicate exports and cross-root cycles.
 - Images and file attachments retain their source URLs. Notion-hosted URLs may expire, so the current mirror is not a durable attachment archive.
-- API pagination is handled for block traversal, but retries and explicit rate-limit backoff rely on the official SDK behavior in this release.
+- Pages above Notion's Markdown response limit are completed through follow-up Markdown requests for each `unknown_block_id`. Recovered subtrees replace their `<unknown>` placeholders in place. Self-referential page aliases are resolved through the official block API into labeled, non-traversed page references. If another block remains unresolved, the Action emits a warning and preserves the explicit `<unknown>` placeholder rather than omitting content or failing the entire mirror.
+- API pagination is handled for inline database queries, and the official SDK retries retryable rate-limit and service errors in this release.
 
 Before broad adoption, run the Action against a representative Notion tree containing rich text, nested lists and tasks, code, callouts, media, tables, toggles, synced blocks, columns, and unsupported content. Review the generated Markdown and document any workspace-specific fidelity requirements.
 
@@ -135,7 +133,7 @@ npm run build
 
 `npm run mirror:local` performs a live export against Notion. It uses the same Action input environment variables as GitHub Actions, so keep the token in an existing local environment variable and use a separate output directory while testing.
 
-For detailed live progress while diagnosing a large export, set `NOTION_LEDGER_DEBUG=true`. It logs each Notion page retrieval, child-block pagination batch, inline database query, and page conversion; the flag is disabled by default and never logs the integration token.
+For detailed live progress while diagnosing a large export, set `NOTION_LEDGER_DEBUG=true`. It logs each page metadata and Markdown retrieval plus inline database queries; the flag is disabled by default and never logs the integration token.
 
 On windows in powershell:
 ```powershell

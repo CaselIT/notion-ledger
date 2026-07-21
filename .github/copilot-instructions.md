@@ -5,7 +5,7 @@
 - Treat this file as the durable engineering contract and `README.md` as the current user-facing contract.
 - This is a one-way, read-only Notion-to-GitHub Markdown mirror. Never write repository content back to Notion.
 - Use only the official Notion API with an internal integration token. Never use browser cookies, undocumented APIs, or log the token.
-- Scope discovery to the configured root pages, their descendant `child_page` blocks, and rows returned by inline databases encountered in those trees. Do not search or export every page or database accessible to the integration.
+- Scope discovery to the configured root pages, descendant `<page>` references returned by enhanced Markdown, and rows returned by inline databases referenced in those trees. Render page aliases as titled references marked outside the current root, but do not traverse their targets. Do not search or export every page or database accessible to the integration.
 - Optimize for readable, auditable Git diffs and stable history rather than lossless round-trip fidelity.
 
 ## Action Contract
@@ -25,13 +25,14 @@
 
 - Generated files must stay inside the configured `output-dir`, which must not be the repository root.
 - Allocate one stable title-and-ID directory and one mirror index per root. Preserve `.mirror-roots.json` so root title changes retain existing directories.
-- Keep output deterministic. Do not add volatile values such as `synced_at`, and avoid rewriting unchanged files.
+- Keep generated page content deterministic and avoid rewriting unchanged page files. Record `last_checked_at` only in the mirror index after each successful page check; do not add volatile timestamps to generated Markdown.
 - Preserve the `.mirror-index.json` mapping so title changes retain existing paths and Git history.
+- Persist each rendered page and its mirror-index entry before visiting the next page. Defer orphan deletion until traversal completes successfully so interrupted runs retain unseen indexed pages.
 - Export inline database rows as indexed Markdown files and link their titles from the parent database list using planned stable paths.
 - Orphan cleanup may delete only validated files recorded in the mirror index. Never remove user-authored files or files outside `output-dir`.
 - Removing a root from `root-pages` must not automatically delete its directory or root-index entry.
-- Continue using `notion-to-md` for block conversion. Do not replace it with hand-written block-to-Markdown conversion without a documented requirement.
-- Keep `parseChildPages: false`: traversal and the mirror index own child-page discovery and paths, and each child page is rendered as its own file.
+- Use the official retrieve-page-Markdown API for content and child-reference discovery. Do not reconstruct page Markdown from block objects.
+- Retrieve each page's Markdown once per run and reuse it for rendering. When Notion truncates a response, retrieve each reported unknown block subtree through the same official Markdown API and replace its placeholder in place. Resolve a self-referential page alias through the official block API, fetch its target title, and render it without traversing the target. Preserve other self-referential unresolved `<unknown>` placeholders with a visible warning. Traverse discovered page references depth-first; inline database rows continue to use the official database and data-source APIs.
 - Preserve source image/file URLs. Do not add asset downloading unless it is implemented end to end with stable names, URL rewriting, failure handling, size limits, tests, and documentation.
 
 ## Generated Page Format
@@ -50,8 +51,8 @@
 ## Code Ownership
 
 - `src/inputs.ts`: input parsing and workspace path safety.
-- `src/notion.ts`: root-scoped traversal, inline database row discovery, and page metadata extraction.
-- `src/render.ts`: `notion-to-md` integration, YAML front matter, and generated page layout.
+- `src/notion.ts`: root-scoped enhanced-Markdown traversal, inline database row discovery, and page metadata extraction.
+- `src/render.ts`: YAML front matter and generated page layout.
 - `src/paths.ts`: filename strategies, collision handling, and indexed path safety.
 - `src/state.ts`: deterministic writes, root/page index persistence, and orphan reconciliation.
 - `src/index.ts`: Action orchestration, logs, outputs, and job summary.

@@ -1,20 +1,19 @@
 import path from "node:path";
 import * as core from "@actions/core";
 import { Client } from "@notionhq/client";
-import { NotionToMarkdown } from "notion-to-md";
 import {
   parseBoolean,
   parseFilenameStrategy,
   parseRootPageIds,
   resolveOutputDirectory,
 } from "./inputs";
-import { discoverPages, type PageMetadata } from "./notion";
+import { discoverPages } from "./notion";
+import { renderPage } from "./render";
 import {
-  configureInlineDatabaseRenderer,
-  convertPage,
-  renderPage,
-} from "./render";
-import { planPagePaths, planRootPaths, reconcileMirror } from "./state";
+  beginIncrementalMirror,
+  type IncrementalMirrorWriter,
+  planRootPaths,
+} from "./state";
 
 export async function run(): Promise<void> {
   const notionToken = core.getInput("notion-token", { required: true });
@@ -43,20 +42,45 @@ export async function run(): Promise<void> {
   );
 
   const notion = new Client({ auth: notionToken });
-  const n2m = new NotionToMarkdown({
-    notionClient: notion,
-    config: { parseChildPages: false },
-  });
 
   let pagesExported = 0;
   let pagesChanged = 0;
   let pagesDeleted = 0;
   let warnedAboutUserInfo = false;
-  const discoveries: Array<{ rootPageId: string; pages: PageMetadata[] }> = [];
+  const warnedUnknownBlocks = new Set<string>();
   for (const rootPageId of rootPageIds) {
     core.info(`Discovering pages below Notion root ${rootPageId}.`);
-    const pages = await discoverPages(notion, rootPageId, {
+    let writer: IncrementalMirrorWriter | undefined;
+    await discoverPages(notion, rootPageId, {
+      collectPages: false,
       onProgress: debug,
+      onPage: async (page) => {
+        if (!writer) {
+          if (page.id !== rootPageId) {
+            throw new Error(`Notion root page ${rootPageId} was not discovered first.`);
+          }
+          const rootPaths = await planRootPaths(outputDir, [page]);
+          writer = await beginIncrementalMirror({
+            outputDir: path.join(outputDir, rootPaths[rootPageId]),
+            rootPageId,
+            filenameStrategy,
+            deleteOrphans,
+          });
+        }
+        await writer.writePage({
+          page,
+          content: renderPage(page, page.markdown, addFrontmatter),
+        });
+      },
+      onUnknownBlockUnresolved: (blockId) => {
+        if (!warnedUnknownBlocks.has(blockId)) {
+          warnedUnknownBlocks.add(blockId);
+          core.warning(
+            `Notion could not resolve Markdown block ${blockId}; `
+            + "preserving its <unknown> placeholder.",
+          );
+        }
+      },
       onUserInfoUnavailable: () => {
         if (!warnedAboutUserInfo) {
           warnedAboutUserInfo = true;
@@ -67,47 +91,10 @@ export async function run(): Promise<void> {
         }
       },
     });
-    const rootPage = pages[0];
-    if (!rootPage || rootPage.id !== rootPageId) {
+    if (!writer) {
       throw new Error(`Notion root page ${rootPageId} was not discovered.`);
     }
-    discoveries.push({ rootPageId, pages });
-  }
-  const rootPaths = await planRootPaths(
-    outputDir,
-    discoveries.map(({ pages }) => pages[0]),
-  );
-
-  for (const { rootPageId, pages } of discoveries) {
-    const rootOutputDir = path.join(
-      outputDir,
-      rootPaths[rootPageId],
-    );
-    const pagePaths = await planPagePaths(
-      rootOutputDir,
-      rootPageId,
-      pages,
-      filenameStrategy,
-    );
-    const renderedPages = [];
-    for (const page of pages) {
-      debug(`Rendering "${page.title}" (${page.id}).`);
-      configureInlineDatabaseRenderer(n2m, notion, pagePaths[page.id], pagePaths, debug);
-      const markdown = await convertPage(n2m, page.id);
-      renderedPages.push({
-        page,
-        content: renderPage(page, markdown, addFrontmatter),
-      });
-    }
-
-    const result = await reconcileMirror({
-      outputDir: rootOutputDir,
-      rootPageId,
-      renderedPages,
-      pagePaths,
-      filenameStrategy,
-      deleteOrphans,
-    });
+    const result = await writer.finish();
     pagesExported += result.pagesExported;
     pagesChanged += result.pagesChanged;
     pagesDeleted += result.pagesDeleted;

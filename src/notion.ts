@@ -1,12 +1,6 @@
 import { APIErrorCode, APIResponseError } from "@notionhq/client";
 import { normalizePageId } from "./inputs";
 
-interface BlockResponse {
-  id: string;
-  type?: string;
-  has_children?: boolean;
-}
-
 interface PageResponse {
   id: string;
   url: string;
@@ -15,22 +9,19 @@ interface PageResponse {
   properties: Record<string, unknown>;
 }
 
+export interface PageMarkdownResponse {
+  markdown: string;
+  truncated: boolean;
+  unknown_block_ids: string[];
+}
+
 export interface NotionClient {
   blocks: {
-    children: {
-      list: (parameters: {
-        block_id: string;
-        page_size: number;
-        start_cursor?: string;
-      }) => Promise<{
-        results: BlockResponse[];
-        has_more: boolean;
-        next_cursor: string | null;
-      }>;
-    };
+    retrieve: (parameters: { block_id: string }) => Promise<unknown>;
   };
   pages: {
     retrieve: (parameters: { page_id: string }) => Promise<unknown>;
+    retrieveMarkdown: (parameters: { page_id: string }) => Promise<PageMarkdownResponse>;
   };
   databases: {
     retrieve: (parameters: { database_id: string }) => Promise<unknown>;
@@ -59,59 +50,181 @@ export interface PageMetadata {
   lastEditedBy?: string;
 }
 
+export interface DiscoveredPage extends PageMetadata {
+  markdown: string;
+}
+
+export interface MarkdownReference {
+  type: "page" | "database";
+  id: string;
+}
+
 export interface DiscoverPagesOptions {
+  collectPages?: boolean;
+  onPage?: (page: DiscoveredPage) => Promise<void> | void;
+  onUnknownBlockUnresolved?: (blockId: string) => void;
   onUserInfoUnavailable?: () => void;
   onProgress?: (message: string) => void;
 }
 
-export async function listAllChildren(
-  notion: NotionClient,
+function replaceUnknownBlock(
+  markdown: string,
   blockId: string,
-  onProgress?: (message: string) => void,
-): Promise<BlockResponse[]> {
-  const blocks: BlockResponse[] = [];
-  let cursor: string | undefined;
-  let batch = 1;
-  do {
-    onProgress?.(`Listing child blocks for ${blockId} (batch ${batch}).`);
-    const response = await notion.blocks.children.list({
-      block_id: blockId,
-      page_size: 100,
-      ...(cursor ? { start_cursor: cursor } : {}),
-    });
-    blocks.push(...response.results);
-    onProgress?.(`Received ${response.results.length} child block(s) for ${blockId}.`);
-    cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
-    batch += 1;
-  } while (cursor);
+  replacement: string,
+): string {
+  const lines = markdown.split("\n");
+  const normalizedBlockId = normalizePageId(blockId);
+  let fallbackIndex: number | undefined;
+  let replacementIndex: number | undefined;
+  let indentation = "";
 
-  return blocks;
-}
-
-export async function findChildPageIds(
-  notion: NotionClient,
-  blockId: string,
-  onProgress?: (message: string) => void,
-): Promise<string[]> {
-  const pageIds: string[] = [];
-  const blocks = await listAllChildren(notion, blockId, onProgress);
-
-  for (const block of blocks) {
-    if ("type" in block && block.type === "child_page") {
-      pageIds.push(normalizePageId(block.id));
-    } else if ("type" in block && block.type === "child_database") {
-      const rows = await queryInlineDatabaseRows(notion, block.id, onProgress);
-      for (const row of rows) {
-        if (isRecord(row) && row.object === "page" && typeof row.id === "string") {
-          pageIds.push(normalizePageId(row.id));
-        }
-      }
-    } else if ("has_children" in block && block.has_children) {
-      pageIds.push(...await findChildPageIds(notion, block.id, onProgress));
+  for (let index = 0; index < lines.length; index += 1) {
+    const placeholder = lines[index].match(/^([\t ]*)<unknown\b([^>]*)\/>[\t ]*$/);
+    if (!placeholder) {
+      continue;
+    }
+    fallbackIndex ??= index;
+    const url = placeholder[2].match(/\burl="([^"]+)"/)?.[1];
+    const ids = url
+      ? Array.from(url.matchAll(
+        /([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=[^0-9a-f]|$)/gi,
+      ))
+      : [];
+    const id = ids.at(-1)?.[1];
+    if (id && normalizePageId(id) === normalizedBlockId) {
+      replacementIndex = index;
+      indentation = placeholder[1];
+      break;
     }
   }
 
-  return pageIds;
+  replacementIndex ??= fallbackIndex;
+  if (replacementIndex === undefined) {
+    throw new Error(`Notion Markdown has no placeholder for unknown block ${normalizedBlockId}.`);
+  }
+  if (!indentation) {
+    indentation = lines[replacementIndex].match(/^([\t ]*)/)?.[1] ?? "";
+  }
+  const replacementLines = replacement.replace(/\n$/, "").split("\n").map(
+    (line) => line ? `${indentation}${line}` : line,
+  );
+  lines.splice(replacementIndex, 1, ...replacementLines);
+  return lines.join("\n");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+async function resolvePageAlias(
+  notion: Pick<NotionClient, "blocks" | "pages">,
+  blockId: string,
+): Promise<string | undefined> {
+  const block = await notion.blocks.retrieve({ block_id: blockId });
+  if (
+    !isRecord(block)
+    || block.type !== "link_to_page"
+    || !isRecord(block.link_to_page)
+    || block.link_to_page.type !== "page_id"
+    || typeof block.link_to_page.page_id !== "string"
+  ) {
+    return undefined;
+  }
+
+  const target = toPageMetadata(await notion.pages.retrieve({
+    page_id: normalizePageId(block.link_to_page.page_id),
+  }));
+  return `<page url="${escapeHtml(target.url)}" outside-current-root="true">${escapeHtml(target.title)} (outside current root)</page>`;
+}
+
+async function retrieveCompleteMarkdown(
+  notion: Pick<NotionClient, "blocks" | "pages">,
+  pageOrBlockId: string,
+  onProgress?: (message: string) => void,
+  onUnknownBlockUnresolved?: (blockId: string) => void,
+  ancestors = new Set<string>(),
+): Promise<string> {
+  const normalizedId = normalizePageId(pageOrBlockId);
+  if (ancestors.has(normalizedId)) {
+    throw new Error(`Notion returned a cyclic unknown block reference for ${normalizedId}.`);
+  }
+  ancestors.add(normalizedId);
+  try {
+    const response = await notion.pages.retrieveMarkdown({ page_id: normalizedId });
+    if (!response.truncated) {
+      return response.markdown;
+    }
+    if (response.unknown_block_ids.length === 0) {
+      throw new Error(
+        `Notion returned incomplete Markdown for ${normalizedId} without retrievable block IDs.`,
+      );
+    }
+
+    let markdown = response.markdown;
+    for (const unknownBlockId of response.unknown_block_ids) {
+      const normalizedBlockId = normalizePageId(unknownBlockId);
+      if (ancestors.has(normalizedBlockId)) {
+        const alias = await resolvePageAlias(notion, normalizedBlockId).catch(() => undefined);
+        if (alias) {
+          markdown = replaceUnknownBlock(markdown, normalizedBlockId, alias);
+          continue;
+        }
+        onUnknownBlockUnresolved?.(normalizedBlockId);
+        continue;
+      }
+      onProgress?.(`Retrieving incomplete Markdown subtree ${normalizedBlockId}.`);
+      const subtree = await retrieveCompleteMarkdown(
+        notion,
+        normalizedBlockId,
+        onProgress,
+        onUnknownBlockUnresolved,
+        ancestors,
+      );
+      markdown = replaceUnknownBlock(markdown, normalizedBlockId, subtree);
+    }
+    return markdown;
+  } finally {
+    ancestors.delete(normalizedId);
+  }
+}
+
+export function findMarkdownReferences(markdown: string): MarkdownReference[] {
+  const references: MarkdownReference[] = [];
+  let fence: { character: string; length: number } | undefined;
+  for (const line of markdown.split("\n")) {
+    const fenceMarker = line.match(/^[\t ]*(`{3,}|~{3,})/)?.[1];
+    if (fenceMarker) {
+      if (!fence) {
+        fence = { character: fenceMarker[0], length: fenceMarker.length };
+      } else if (fenceMarker[0] === fence.character && fenceMarker.length >= fence.length) {
+        fence = undefined;
+      }
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
+    const tag = line.match(/^[\t ]*<(page|database)\b([^>]*)>/);
+    const url = tag?.[2].match(/\burl="([^"]+)"/)?.[1];
+    if (!tag || !url) {
+      continue;
+    }
+    if (/\boutside-current-root="true"/.test(tag[2])) {
+      continue;
+    }
+    const id = url.match(
+      /([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[^0-9a-f]|$)/i,
+    )?.[1];
+    if (!id) {
+      throw new Error(`Notion Markdown ${tag[1]} reference has no page ID: ${url}`);
+    }
+    references.push({ type: tag[1] as MarkdownReference["type"], id: normalizePageId(id) });
+  }
+  return references;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -220,9 +333,15 @@ async function retrieveUserName(
 export async function discoverPages(
   notion: NotionClient,
   rootPageId: string,
-  { onUserInfoUnavailable, onProgress }: DiscoverPagesOptions = {},
-): Promise<PageMetadata[]> {
-  const pages: PageMetadata[] = [];
+  {
+    collectPages = true,
+    onPage,
+    onUnknownBlockUnresolved,
+    onUserInfoUnavailable,
+    onProgress,
+  }: DiscoverPagesOptions = {},
+): Promise<DiscoveredPage[]> {
+  const pages: DiscoveredPage[] = [];
   const visited = new Set();
   const userNames = new Map<string, Promise<string | undefined>>();
   let userInfoAvailable = true;
@@ -256,9 +375,32 @@ export async function discoverPages(
       userNames.set(lastEditedById, name);
       metadata.lastEditedBy = await name;
     }
-    pages.push(metadata);
+    onProgress?.(`Retrieving Markdown for "${metadata.title}" (${normalizedId}).`);
+    const markdown = await retrieveCompleteMarkdown(
+      notion,
+      normalizedId,
+      onProgress,
+      onUnknownBlockUnresolved,
+    );
+    const discoveredPage = { ...metadata, markdown };
+    if (collectPages) {
+      pages.push(discoveredPage);
+    }
+    await onPage?.(discoveredPage);
 
-    const childIds = await findChildPageIds(notion, normalizedId, onProgress);
+    const childIds: string[] = [];
+    for (const reference of findMarkdownReferences(markdown)) {
+      if (reference.type === "page") {
+        childIds.push(reference.id);
+        continue;
+      }
+      const rows = await queryInlineDatabaseRows(notion, reference.id, onProgress);
+      for (const row of rows) {
+        if (isRecord(row) && row.object === "page" && typeof row.id === "string") {
+          childIds.push(normalizePageId(row.id));
+        }
+      }
+    }
     onProgress?.(`Discovered ${childIds.length} child page(s) below ${normalizedId}.`);
     for (const childId of childIds) {
       await visit(childId);
