@@ -133,7 +133,7 @@ npm run build
 
 `npm run mirror:local` performs a live export against Notion. It uses the same Action input environment variables as GitHub Actions, so keep the token in an existing local environment variable and use a separate output directory while testing.
 
-For detailed live progress while diagnosing a large export, set `NOTION_LEDGER_DEBUG=true`. It logs each page metadata and Markdown retrieval plus inline database queries; the flag is disabled by default and never logs the integration token.
+For detailed progress, the Action uses the standard `@actions/core` debug channel. In GitHub Actions, create an `ACTIONS_STEP_DEBUG` secret with the value `true` and rerun the workflow to show page retrieval and inline database query logs. For local runs, set `RUNNER_DEBUG=1` to enable the equivalent runner debug mode. Debug logs never include the integration token.
 
 On windows in powershell:
 ```powershell
@@ -142,7 +142,7 @@ On windows in powershell:
 [Environment]::SetEnvironmentVariable('INPUT_OUTPUT-DIR', 'docs/notion-local-test', 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_ADD-FRONTMATTER', 'true', 'Process')
 [Environment]::SetEnvironmentVariable('INPUT_DELETE-ORPHANS', 'false', 'Process')
-[Environment]::SetEnvironmentVariable('NOTION_LEDGER_DEBUG', 'true', 'Process')
+$env:RUNNER_DEBUG = '1'
 $env:GITHUB_WORKSPACE = (Get-Location).Path
 
 npm run mirror:local
@@ -153,12 +153,12 @@ On a bash-like shell:
 export GITHUB_WORKSPACE="$PWD"
 
 env \
+  'RUNNER_DEBUG'='1' \
   'INPUT_NOTION-TOKEN'="$NOTION_TOKEN" \
   'INPUT_ROOT-PAGES'="$NOTION_MIRROR_ROOT_PAGES" \
   'INPUT_OUTPUT-DIR'='docs/notion-local-test' \
   'INPUT_ADD-FRONTMATTER'='true' \
   'INPUT_DELETE-ORPHANS'='false' \
-  'NOTION_LEDGER_DEBUG'='true' \
   npm run mirror:local
 ```
 

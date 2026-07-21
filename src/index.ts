@@ -15,14 +15,20 @@ import {
   planRootPaths,
 } from "./state";
 
+type LogLevel = "debug" | "info" | "warn";
+
+const actionLoggers: Record<LogLevel, (message: string) => void> = {
+  debug: core.debug,
+  info: core.info,
+  warn: core.warning,
+};
+
+function log(level: LogLevel, message: string): void {
+  actionLoggers[level](message);
+}
+
 export async function run(): Promise<void> {
   const notionToken = core.getInput("notion-token", { required: true });
-  const debugEnabled = process.env.NOTION_LEDGER_DEBUG?.trim().toLowerCase() === "true";
-  const debug = (message: string): void => {
-    if (debugEnabled) {
-      core.info(`[debug] ${message}`);
-    }
-  };
   const rootPageIds = parseRootPageIds(core.getInput("root-pages", { required: true }));
   const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
   const outputDir = resolveOutputDirectory(
@@ -49,10 +55,10 @@ export async function run(): Promise<void> {
   let warnedAboutUserInfo = false;
   const warnedUnknownBlocks = new Set<string>();
   for (const rootPageId of rootPageIds) {
-    core.info(`Discovering pages below Notion root ${rootPageId}.`);
+    log("info", `Discovering pages below Notion root ${rootPageId}.`);
     let writer: IncrementalMirrorWriter | undefined;
     await discoverPages(notion, rootPageId, {
-      onProgress: debug,
+      onProgress: (message) => log("debug", message),
       onPage: async (page) => {
         if (!writer) {
           if (page.id !== rootPageId) {
@@ -74,7 +80,7 @@ export async function run(): Promise<void> {
       onUnknownBlockUnresolved: (blockId) => {
         if (!warnedUnknownBlocks.has(blockId)) {
           warnedUnknownBlocks.add(blockId);
-          core.warning(
+          log("warn",
             `Notion could not resolve Markdown block ${blockId}; `
             + "preserving its <unknown> placeholder.",
           );
@@ -83,7 +89,7 @@ export async function run(): Promise<void> {
       onUserInfoUnavailable: () => {
         if (!warnedAboutUserInfo) {
           warnedAboutUserInfo = true;
-          core.warning(
+          log("warn",
             "Skipping last_edited_by because the Notion integration does not have "
             + "User information without email addresses capability.",
           );
@@ -102,7 +108,7 @@ export async function run(): Promise<void> {
   core.setOutput("pages-exported", pagesExported);
   core.setOutput("pages-changed", pagesChanged);
   core.setOutput("pages-deleted", pagesDeleted);
-  core.info(
+  log("info",
     `Exported ${pagesExported} page(s) from ${rootPageIds.length} root(s); `
     + `changed ${pagesChanged}; deleted ${pagesDeleted}.`,
   );
