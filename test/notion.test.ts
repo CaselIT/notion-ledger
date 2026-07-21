@@ -114,6 +114,18 @@ function restrictedUserInformationError(): APIResponseError {
   });
 }
 
+function missingUserInformationError(): APIResponseError {
+  return new APIResponseError({
+    code: APIErrorCode.ObjectNotFound,
+    status: 404,
+    message: "Could not find user.",
+    headers: new Headers(),
+    rawBodyText: "",
+    additional_data: undefined,
+    request_id: undefined,
+  });
+}
+
 test("finds ordered page and database references in enhanced Markdown", () => {
   const markdown = [
     `<page url="https://app.notion.com/p/${childId}">Child</page>`,
@@ -392,7 +404,7 @@ test("renders page aliases outside the current root without traversing them", as
   assert.deepEqual(notion.markdownRetrievals(), [rootId, unknownBlockId]);
 });
 
-test("omits editor names when user information is unavailable", async () => {
+test("retains editor IDs when user information is unavailable", async () => {
   const notion = createNotionMock();
   let userRetrievals = 0;
   notion.users.retrieve = async () => {
@@ -407,8 +419,20 @@ test("omits editor names when user information is unavailable", async () => {
     },
   });
 
-  assert.equal(pages[0].lastEditedBy, undefined);
-  assert.equal(pages[1].lastEditedBy, undefined);
+  assert.equal(pages[0].lastEditedBy, "editor");
+  assert.equal(pages[1].lastEditedBy, "editor");
   assert.equal(warnings, 1);
   assert.equal(userRetrievals, 1);
+});
+
+test("retains editor IDs when Notion cannot find a user", async () => {
+  const notion = createNotionMock();
+  notion.users.retrieve = async () => {
+    throw missingUserInformationError();
+  };
+
+  const pages = await collectPages(notion, rootId);
+
+  assert.equal(pages[0].lastEditedBy, "editor");
+  assert.equal(pages[1].lastEditedBy, "editor");
 });

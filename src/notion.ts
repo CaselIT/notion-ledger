@@ -366,23 +366,32 @@ export async function discoverPages(
     const page = await notion.pages.retrieve({ page_id: normalizedId });
     const metadata = toPageMetadata(page);
     const lastEditedById = getLastEditedById(page);
-    if (!metadata.lastEditedBy && lastEditedById && userInfoAvailable) {
-      const name = userNames.get(lastEditedById) ?? retrieveUserName(
-        notion,
-        lastEditedById,
-      ).catch((error: unknown) => {
-        if (
-          APIResponseError.isAPIResponseError(error)
-          && error.code === APIErrorCode.RestrictedResource
-        ) {
-          userInfoAvailable = false;
-          onUserInfoUnavailable?.();
-          return undefined;
-        }
-        throw error;
-      });
-      userNames.set(lastEditedById, name);
-      metadata.lastEditedBy = await name;
+    if (!metadata.lastEditedBy && lastEditedById) {
+      if (!userInfoAvailable) {
+        metadata.lastEditedBy = lastEditedById;
+      } else {
+        const name = userNames.get(lastEditedById) ?? retrieveUserName(
+          notion,
+          lastEditedById,
+        ).catch((error: unknown) => {
+          if (
+            APIResponseError.isAPIResponseError(error)
+            && (
+              error.code === APIErrorCode.RestrictedResource
+              || error.code === APIErrorCode.ObjectNotFound
+            )
+          ) {
+            if (error.code === APIErrorCode.RestrictedResource) {
+              userInfoAvailable = false;
+              onUserInfoUnavailable?.();
+            }
+            return undefined;
+          }
+          throw error;
+        });
+        userNames.set(lastEditedById, name);
+        metadata.lastEditedBy = await name ?? lastEditedById;
+      }
     }
     onProgress?.(`Retrieving Markdown for "${metadata.title}" (${normalizedId}).`);
     const markdown = await retrieveCompleteMarkdown(

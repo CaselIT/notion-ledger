@@ -90,7 +90,7 @@ export async function run(): Promise<void> {
         if (!warnedAboutUserInfo) {
           warnedAboutUserInfo = true;
           log("warn",
-            "Skipping last_edited_by because the Notion integration does not have "
+            "Using Notion editor IDs for last_edited_by because the integration does not have "
             + "User information without email addresses capability.",
           );
         }

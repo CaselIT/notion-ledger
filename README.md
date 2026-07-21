@@ -4,7 +4,7 @@ Notion Ledger is a Node.js 24 GitHub Action that mirrors selected Notion page tr
 
 ## Setup
 
-1. Create a Notion internal integration with the **Read content** capability. Enable **User information without email addresses** only if generated front matter should include the last editor's name; otherwise `last_edited_by` is omitted.
+1. Create a Notion internal integration with the **Read content** capability. Enable **User information without email addresses** if generated front matter should include the last editor's name; otherwise `last_edited_by` records the stable Notion user ID.
 2. Connect the integration to a dedicated top-level page containing the documentation to mirror. Creating an integration alone does not grant access to any pages.
 3. Store the integration secret as a repository Actions secret named `NOTION_TOKEN`.
 4. Store the selected root page URLs or IDs in a newline-delimited repository variable such as `NOTION_MIRROR_ROOT_PAGES`.
