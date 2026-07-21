@@ -1,5 +1,5 @@
 name: Notion Ledger
-description: Mirror selected Notion page trees to stable Markdown files
+description: Mirror selected Notion page trees or databases to stable Markdown files
 author: CaselIT
 
 inputs:
@@ -7,7 +7,7 @@ inputs:
     description: Notion internal integration token
     required: true
   root-pages:
-    description: Newline-delimited Notion root page URLs or IDs to mirror
+    description: Newline-delimited Notion root page or database URLs or IDs to mirror
     required: true
   output-dir:
     description: Repository-relative directory for generated Markdown

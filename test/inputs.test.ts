@@ -9,7 +9,7 @@ import {
   resolveOutputDirectory,
 } from "../src/inputs";
 
-test("parses and deduplicates Notion root page IDs and URLs", () => {
+test("parses and deduplicates Notion root page or database IDs and URLs", () => {
   const id = "8fe4a1b2123434567890abcdefabcdef";
   const secondId = "1234567890abcdef1234567890abcdef";
   assert.deepEqual(parseRootPageIds([
@@ -22,7 +22,7 @@ test("parses and deduplicates Notion root page IDs and URLs", () => {
 
 test("rejects malformed inputs", () => {
   assert.throws(() => parseRootPageIds(""), /at least one/);
-  assert.throws(() => parseRootPageIds("not-a-page"), /Notion page URL or page ID/);
+  assert.throws(() => parseRootPageIds("not-a-page"), /Notion page or database URL or ID/);
   assert.throws(() => parseBoolean("yes", "enabled"), /enabled must be/);
   assert.throws(() => parseFilenameStrategy("slug"), /filename-strategy/);
 });

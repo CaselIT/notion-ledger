@@ -5,7 +5,7 @@
 - Treat this file as the durable engineering contract and `README.md` as the current user-facing contract.
 - This is a one-way, read-only Notion-to-GitHub Markdown mirror. Never write repository content back to Notion.
 - Use only the official Notion API with an internal integration token. Never use browser cookies, undocumented APIs, or log the token.
-- Scope discovery to the configured root pages, descendant `<page>` references returned by enhanced Markdown, and rows returned by inline databases referenced in those trees. Render page aliases as titled references marked outside the current root, but do not traverse their targets. Do not search or export every page or database accessible to the integration.
+- Scope discovery to configured root pages or databases, descendant `<page>` references returned by enhanced Markdown, rows returned by inline databases referenced in page trees, and rows returned by every data source of a configured root database. A root database is a traversal container and does not produce a synthetic Markdown file. Render page aliases as titled references marked outside the current root, but do not traverse their targets. Do not search or export every page or database accessible to the integration.
 - Optimize for readable, auditable Git diffs and stable history rather than lossless round-trip fidelity.
 
 ## Action Contract
@@ -13,7 +13,7 @@
 - Run as a bundled Node.js 24 JavaScript Action. The Action exports files; it does not commit or push them.
 - Inputs:
 	- `notion-token` (required): internal integration token, supplied from an Actions secret.
-	- `root-pages` (required): newline-delimited Notion root page URLs or IDs.
+	- `root-pages` (required): newline-delimited Notion root page or database URLs or IDs.
 	- `output-dir` (default `docs/notion`): repository-relative generated-file directory.
 	- `add-frontmatter` (default `true`): include generated Notion metadata.
 	- `delete-orphans` (default `true`): remove indexed pages no longer below each configured root.
@@ -34,6 +34,7 @@
 - Export inline database rows as indexed Markdown files and link their titles from the parent database list using planned stable paths.
 - Orphan cleanup may delete only validated files recorded in the mirror index. Never remove user-authored files or files outside `output-dir`.
 - Removing a root from `root-pages` must not automatically delete its directory or root-index entry.
+- Resolve each configured root as a page first, then fall back to the official database API only when Notion reports `object_not_found` or explicitly says the ID is a database rather than a page. Query every data source exposed by a root database and traverse returned row pages through the normal page export path.
 - Use the official retrieve-page-Markdown API for content and child-reference discovery. Do not reconstruct page Markdown from block objects.
 - Discover child references by parsing the enhanced Markdown for `<page>` and `<database>` tags rather than walking the block tree. This grep-based traversal is deliberate: the block/children API approach was too slow at scale, so accept the coupling to the Markdown tag format as the intended trade-off.
 - Retrieve each page's Markdown at most once per run when its content or traversal references are not reusable, and reuse that response for rendering. Cache discovered page and database references in the mirror index so unchanged pages can still be traversed without another Markdown request. Query cached inline database references on every run. When Notion truncates a response, retrieve each reported unknown block subtree through the same official Markdown API and replace its placeholder in place. Resolve a self-referential page alias through the official block API, fetch its target title, and render it without traversing the target. Preserve other self-referential unresolved `<unknown>` placeholders with a visible warning. Traverse discovered page references depth-first; inline database rows continue to use the official database and data-source APIs.
@@ -66,7 +67,7 @@ Keep changes in the module that owns the behavior. Prefer small extensions of th
 ## Tests And Release Artifact
 
 - Use Node.js 24+ and the pinned dependencies in `package-lock.json`.
-- Prefer the scripts in `package.json` through `npm` over invoking `node`, `node_modules/.bin`, or underlying tools directly. Use a direct invocation only when no suitable package script exists for the required check.
+- Prefer the scripts in `package.json` through `npm` over invoking `node_modules/.bin` or underlying tools directly. Use `npm run test:file -- test/example.test.ts` for a single test file. Use a direct invocation only when no suitable package script exists; native `node --test` cannot resolve this repository's extensionless TypeScript imports.
 - Add focused regression tests for behavior changes, especially traversal, conversion output, path safety, rename stability, no-op runs, and orphan deletion.
 - Run `npm run typecheck` and `npm test` after source or test changes.
 - Run `npm run build` after any `src/**` change. GitHub Actions executes the checked-in `dist/index.cjs`; consumers do not install dependencies at runtime.

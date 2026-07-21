@@ -7,6 +7,7 @@
     "build": "node scripts/build.mjs",
     "mirror:local": "tsx src/index.ts",
     "test": "tsx --test test/*.test.ts",
+    "test:file": "tsx --test",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

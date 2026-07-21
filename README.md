@@ -1,16 +1,16 @@
 # Notion Ledger
 
-Notion Ledger is a Node.js 24 GitHub Action that mirrors selected Notion page trees to deterministic Markdown files. Notion remains the source of truth; the Action never writes content back to Notion or commits repository changes itself.
+Notion Ledger is a Node.js 24 GitHub Action that mirrors selected Notion page trees or databases to deterministic Markdown files. Notion remains the source of truth; the Action never writes content back to Notion or commits repository changes itself.
 
 ## Setup
 
 1. Create a Notion internal integration with the **Read content** capability. Enable **User information without email addresses** if generated front matter should include the last editor's name; otherwise `last_edited_by` records the stable Notion user ID.
 2. Connect the integration to a dedicated top-level page containing the documentation to mirror. Creating an integration alone does not grant access to any pages.
 3. Store the integration secret as a repository Actions secret named `NOTION_TOKEN`.
-4. Store the selected root page URLs or IDs in a newline-delimited repository variable such as `NOTION_MIRROR_ROOT_PAGES`.
+4. Store the selected root page or database URLs or IDs in a newline-delimited repository variable such as `NOTION_MIRROR_ROOT_PAGES`.
 5. Use a private target repository and protect its default branch as appropriate for the designated mirror bot.
 
-Each configured root page, descendant `<page>` references returned by Notion's enhanced Markdown, and rows of inline databases referenced in that tree are exported. Other pages accessible to the integration are not searched or exported.
+Each configured root page, descendant `<page>` references returned by Notion's enhanced Markdown, and rows of inline databases referenced in that tree are exported. A configured root database acts as a container: every row page across all of its data sources is exported, followed by descendants referenced from those pages. The database itself does not produce a synthetic Markdown file. Other pages and databases accessible to the integration are not searched or exported.
 
 ## Workflow
 
@@ -67,7 +67,7 @@ Staging with `git add --all` before `git diff --cached --quiet` is required so n
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
 | `notion-token` | Yes | | Notion internal integration token. Read it from an Actions secret. |
-| `root-pages` | Yes | | Newline-delimited Notion root page URLs or 32-character page IDs. Duplicate IDs are ignored. |
+| `root-pages` | Yes | | Newline-delimited Notion root page or database URLs or 32-character IDs. Duplicate IDs are ignored. |
 | `output-dir` | No | `docs/notion` | Repository-relative output directory. The repository root and paths outside the workspace are rejected. |
 | `add-frontmatter` | No | `true` | Include YAML source metadata in each Markdown file. |
 | `delete-orphans` | No | `true` | Delete indexed mirror files for pages no longer found below the root. |
@@ -97,7 +97,7 @@ docs/notion/
     pricing-governance--12345678.md
 ```
 
-`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` and discovered page/database references from Notion. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
+`.mirror-roots.json` maps configured root IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` and discovered page/database references from Notion. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
 
 Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are omitted from both generated pages and the mirror index, so an unchanged run produces no Git diff.
 

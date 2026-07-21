@@ -13,6 +13,14 @@ interface PageResponse {
   properties: Record<string, unknown>;
 }
 
+interface DatabaseResponse {
+  id: string;
+  url: string;
+  title: unknown[];
+  last_edited_time: string;
+  data_sources: unknown[];
+}
+
 export interface PageMarkdownResponse {
   markdown: string;
   truncated: boolean;
@@ -64,6 +72,7 @@ export interface MarkdownReference {
 }
 
 export interface DiscoverPagesOptions {
+  onRoot?: (root: PageMetadata, type: "page" | "database") => Promise<void> | void;
   getCachedReferences?: (
     page: PageMetadata,
   ) => Promise<MarkdownReference[] | undefined> | MarkdownReference[] | undefined;
@@ -248,17 +257,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getDataSourceId(database: unknown): string {
+function getDataSourceIds(database: unknown): string[] {
   if (!isRecord(database) || !Array.isArray(database.data_sources)) {
-    throw new Error("Notion returned invalid inline database metadata.");
+    throw new Error("Notion returned invalid database metadata.");
   }
-  const dataSource = database.data_sources.find(
-    (candidate) => isRecord(candidate) && typeof candidate.id === "string",
+  const dataSourceIds = database.data_sources.flatMap(
+    (candidate) => isRecord(candidate) && typeof candidate.id === "string"
+      ? [candidate.id]
+      : [],
   );
-  if (!dataSource || typeof dataSource.id !== "string") {
-    throw new Error("The inline Notion database has no queryable data source.");
+  if (dataSourceIds.length === 0) {
+    throw new Error("The Notion database has no queryable data source.");
   }
-  return dataSource.id;
+  return dataSourceIds;
+}
+
+async function queryDatabaseRowsFromResponse(
+  notion: Pick<NotionClient, "dataSources">,
+  database: unknown,
+  databaseId: string,
+  onProgress?: (message: string) => void,
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (const dataSourceId of getDataSourceIds(database)) {
+    let cursor: string | undefined;
+    let batch = 1;
+    do {
+      onProgress?.(
+        `Querying database ${databaseId} data source ${dataSourceId} (batch ${batch}).`,
+      );
+      const response = await notion.dataSources.query({
+        data_source_id: dataSourceId,
+        page_size: 100,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      });
+      rows.push(...response.results);
+      onProgress?.(`Received ${response.results.length} row(s) from database ${databaseId}.`);
+      cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+      batch += 1;
+    } while (cursor);
+  }
+  return rows;
 }
 
 export async function queryInlineDatabaseRows(
@@ -268,24 +307,7 @@ export async function queryInlineDatabaseRows(
 ): Promise<unknown[]> {
   onProgress?.(`Retrieving inline database metadata for ${databaseId}.`);
   const database = await notion.databases.retrieve({ database_id: databaseId });
-  const dataSourceId = getDataSourceId(database);
-  const rows: unknown[] = [];
-  let cursor: string | undefined;
-  let batch = 1;
-  do {
-    onProgress?.(`Querying inline database ${databaseId} (batch ${batch}).`);
-    const response = await notion.dataSources.query({
-      data_source_id: dataSourceId,
-      page_size: 100,
-      ...(cursor ? { start_cursor: cursor } : {}),
-    });
-    rows.push(...response.results);
-    onProgress?.(`Received ${response.results.length} row(s) from inline database ${databaseId}.`);
-    cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
-    batch += 1;
-  } while (cursor);
-
-  return rows;
+  return queryDatabaseRowsFromResponse(notion, database, databaseId, onProgress);
 }
 
 function requirePageResponse(value: unknown): PageResponse {
@@ -301,18 +323,47 @@ function requirePageResponse(value: unknown): PageResponse {
   return value as unknown as PageResponse;
 }
 
+function requireDatabaseResponse(value: unknown): DatabaseResponse {
+  if (
+    !isRecord(value)
+    || value.object !== "database"
+    || typeof value.id !== "string"
+    || typeof value.url !== "string"
+    || typeof value.last_edited_time !== "string"
+    || !Array.isArray(value.title)
+    || !Array.isArray(value.data_sources)
+  ) {
+    throw new Error("Notion returned partial or invalid database metadata.");
+  }
+  return value as unknown as DatabaseResponse;
+}
+
+function getRichTextPlainText(parts: unknown[]): string {
+  return parts
+    .filter((part): part is Record<string, unknown> => isRecord(part))
+    .map((part) => typeof part.plain_text === "string" ? part.plain_text : "")
+    .join("")
+    .trim();
+}
+
 export function getPageTitle(page: PageResponse): string {
   const titleProperty = Object.values(page.properties ?? {}).find(
     (property) => isRecord(property) && property.type === "title",
   );
   const title = isRecord(titleProperty) && Array.isArray(titleProperty.title)
-    ? titleProperty.title
-      .filter((part): part is Record<string, unknown> => isRecord(part))
-      .map((part) => typeof part.plain_text === "string" ? part.plain_text : "")
-    .join("")
-    .trim()
+    ? getRichTextPlainText(titleProperty.title)
     : "";
   return title || "Untitled";
+}
+
+export function toDatabaseMetadata(value: unknown): PageMetadata {
+  const database = requireDatabaseResponse(value);
+  return {
+    id: normalizePageId(database.id),
+    url: database.url,
+    title: getRichTextPlainText(database.title) || "Untitled database",
+    lastEditedAt: database.last_edited_time,
+  };
 }
 
 export function toPageMetadata(value: unknown): PageMetadata {
@@ -347,10 +398,22 @@ async function retrieveUserName(
     : undefined;
 }
 
+function shouldTryDatabaseRoot(error: unknown): boolean {
+  return APIResponseError.isAPIResponseError(error)
+    && (
+      error.code === APIErrorCode.ObjectNotFound
+      || (
+        error.code === APIErrorCode.ValidationError
+        && /\bis a database, not a page\b/i.test(error.message)
+      )
+    );
+}
+
 export async function discoverPages(
   notion: NotionClient,
   rootPageId: string,
   {
+    onRoot,
     getCachedReferences,
     onPage,
     onUnknownBlockUnresolved,
@@ -362,15 +425,17 @@ export async function discoverPages(
   const userNames = new Map<string, Promise<string | undefined>>();
   let userInfoAvailable = true;
 
-  async function visit(pageId: string): Promise<void> {
+  async function visit(pageId: string, retrievedPage?: unknown): Promise<void> {
     const normalizedId = normalizePageId(pageId);
     if (visited.has(normalizedId)) {
       return;
     }
     visited.add(normalizedId);
 
-    onProgress?.(`Retrieving page metadata for ${normalizedId}.`);
-    const page = await notion.pages.retrieve({ page_id: normalizedId });
+    if (retrievedPage === undefined) {
+      onProgress?.(`Retrieving page metadata for ${normalizedId}.`);
+    }
+    const page = retrievedPage ?? await notion.pages.retrieve({ page_id: normalizedId });
     const metadata = toPageMetadata(page);
     let references = await getCachedReferences?.(metadata);
     if (references === undefined) {
@@ -434,5 +499,35 @@ export async function discoverPages(
     }
   }
 
-  await visit(rootPageId);
+  const normalizedRootId = normalizePageId(rootPageId);
+  onProgress?.(`Retrieving page metadata for ${normalizedRootId}.`);
+  let rootPage: unknown;
+  try {
+    rootPage = await notion.pages.retrieve({ page_id: normalizedRootId });
+  } catch (error: unknown) {
+    if (!shouldTryDatabaseRoot(error)) {
+      throw error;
+    }
+    onProgress?.(`Root ${normalizedRootId} is not a page; retrieving database metadata.`);
+    const database = await notion.databases.retrieve({ database_id: normalizedRootId });
+    await onRoot?.(toDatabaseMetadata(database), "database");
+    const rows = await queryDatabaseRowsFromResponse(
+      notion,
+      database,
+      normalizedRootId,
+      onProgress,
+    );
+    const rowIds = rows.flatMap((row) => (
+      isRecord(row) && row.object === "page" && typeof row.id === "string"
+        ? [normalizePageId(row.id)]
+        : []
+    ));
+    onProgress?.(`Discovered ${rowIds.length} row page(s) in root database ${normalizedRootId}.`);
+    for (const rowId of rowIds) {
+      await visit(rowId);
+    }
+    return;
+  }
+  await onRoot?.(toPageMetadata(rootPage), "page");
+  await visit(normalizedRootId, rootPage);
 }

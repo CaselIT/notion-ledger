@@ -98,7 +98,7 @@ export async function run(): Promise<void> {
           return writer;
         }
         if (page.id !== rootPageId) {
-          throw new Error(`Notion root page ${rootPageId} was not discovered first.`);
+          throw new Error(`Notion root ${rootPageId} was not discovered first.`);
         }
         const rootPaths = await planRootPaths(outputDir, [page]);
         writer = await beginIncrementalMirror({
@@ -112,6 +112,9 @@ export async function run(): Promise<void> {
       };
       await discoverPages(notion, rootPageId, {
         onProgress: (message) => log("debug", message),
+        onRoot: async (root) => {
+          await ensureWriter(root);
+        },
         getCachedReferences: async (page) => {
           const currentWriter = await ensureWriter(page);
           return fullExport ? undefined : currentWriter.reusePage(page);
@@ -144,7 +147,7 @@ export async function run(): Promise<void> {
         },
       });
       if (!writer) {
-        throw new Error(`Notion root page ${rootPageId} was not discovered.`);
+        throw new Error(`Notion root ${rootPageId} was not discovered.`);
       }
       const result = await writer.finish();
       activeWriter = undefined;

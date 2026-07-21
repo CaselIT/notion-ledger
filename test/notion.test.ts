@@ -141,18 +141,24 @@ test("finds ordered page and database references in enhanced Markdown", () => {
   ]);
 });
 
-test("queries all pages in an inline database", async () => {
-  const cursors: Array<string | undefined> = [];
+test("queries all pages across every data source in a database", async () => {
+  const queries: Array<{ dataSourceId: string; cursor: string | undefined }> = [];
   const rows = await queryInlineDatabaseRows({
     databases: {
       retrieve: async () => ({
         object: "database",
-        data_sources: [{ id: "data-source-id", name: "Tasks" }],
+        data_sources: [
+          { id: "first-source", name: "Tasks" },
+          { id: "second-source", name: "Archive" },
+        ],
       }),
     },
     dataSources: {
-      query: async ({ start_cursor: cursor }) => {
-        cursors.push(cursor);
+      query: async ({ data_source_id: dataSourceId, start_cursor: cursor }) => {
+        queries.push({ dataSourceId, cursor });
+        if (dataSourceId === "second-source") {
+          return { results: [{ id: "third" }], has_more: false, next_cursor: null };
+        }
         return cursor
           ? { results: [{ id: "second" }], has_more: false, next_cursor: null }
           : { results: [{ id: "first" }], has_more: true, next_cursor: "next" };
@@ -160,8 +166,12 @@ test("queries all pages in an inline database", async () => {
     },
   }, "database-id");
 
-  assert.deepEqual(rows, [{ id: "first" }, { id: "second" }]);
-  assert.deepEqual(cursors, [undefined, "next"]);
+  assert.deepEqual(rows, [{ id: "first" }, { id: "second" }, { id: "third" }]);
+  assert.deepEqual(queries, [
+    { dataSourceId: "first-source", cursor: undefined },
+    { dataSourceId: "first-source", cursor: "next" },
+    { dataSourceId: "second-source", cursor: undefined },
+  ]);
 });
 
 test("discovers inline database rows as child pages", async () => {
@@ -204,6 +214,87 @@ test("discovers root and descendant metadata", async () => {
   assert.equal(notion.userRetrievals(), 1);
   assert.deepEqual(notion.markdownRetrievals(), [rootId, childId]);
   assert.match(pages[0].markdown, /<page /);
+});
+
+test("discovers database root rows as pages", async () => {
+  const notion = createNotionMock();
+  const retrievePage = notion.pages.retrieve;
+  notion.pages.retrieve = async ({ page_id: pageId }) => {
+    if (pageId === databaseId) {
+      throw new APIResponseError({
+        code: APIErrorCode.ValidationError,
+        status: 400,
+        message: `Provided ID ${databaseId} is a database, not a page. Use the retrieve database API instead.`,
+        headers: new Headers(),
+        rawBodyText: "",
+        additional_data: undefined,
+        request_id: undefined,
+      });
+    }
+    return retrievePage({ page_id: pageId });
+  };
+  notion.databases.retrieve = async ({ database_id: requestedId }) => ({
+    object: "database",
+    id: requestedId,
+    url: `https://notion.so/${requestedId}`,
+    title: [{ plain_text: "Knowledge base" }],
+    last_edited_time: "2026-07-20T09:30:00.000Z",
+    data_sources: [{ id: "knowledge-source", name: "Knowledge base" }],
+  });
+  notion.dataSources.query = async () => ({
+    results: [{ object: "page", id: childId }],
+    has_more: false,
+    next_cursor: null,
+  });
+  const roots: Array<{ title: string; type: "page" | "database" }> = [];
+
+  const pages = await collectPages(notion, databaseId, {
+    onRoot: (root, type) => {
+      roots.push({ title: root.title, type });
+    },
+  });
+
+  assert.deepEqual(roots, [{ title: "Knowledge base", type: "database" }]);
+  assert.deepEqual(pages.map((page) => page.id), [childId]);
+  assert.deepEqual(notion.markdownRetrievals(), [childId]);
+});
+
+test("does not try database fallback for unrelated validation errors", async () => {
+  const notion = createNotionMock();
+  notion.pages.retrieve = async () => {
+    throw new APIResponseError({
+      code: APIErrorCode.ValidationError,
+      status: 400,
+      message: "The page ID is invalid.",
+      headers: new Headers(),
+      rawBodyText: "",
+      additional_data: undefined,
+      request_id: undefined,
+    });
+  };
+  let databaseRetrievals = 0;
+  notion.databases.retrieve = async () => {
+    databaseRetrievals += 1;
+    return {};
+  };
+
+  await assert.rejects(discoverPages(notion, rootId), /page ID is invalid/);
+  assert.equal(databaseRetrievals, 0);
+});
+
+test("does not try database fallback for other page retrieval errors", async () => {
+  const notion = createNotionMock();
+  notion.pages.retrieve = async () => {
+    throw restrictedUserInformationError();
+  };
+  let databaseRetrievals = 0;
+  notion.databases.retrieve = async () => {
+    databaseRetrievals += 1;
+    return {};
+  };
+
+  await assert.rejects(discoverPages(notion, rootId), /Insufficient permissions/);
+  assert.equal(databaseRetrievals, 0);
 });
 
 test("streams each page through onPage in depth-first order", async () => {
