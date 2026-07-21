@@ -321,6 +321,37 @@ test("preserves self-referential unknown subtrees", async () => {
   assert.deepEqual(unresolved, [unknownBlockId]);
 });
 
+test("preserves inaccessible unknown subtrees", async () => {
+  const notion = createNotionMock();
+  const placeholder = `<unknown url="https://app.notion.com/p/${rootId}#${unknownBlockId}" alt="unsupported"/>`;
+  notion.pages.retrieveMarkdown = async ({ page_id: pageId }) => {
+    if (pageId === rootId) {
+      return {
+        markdown: `Before\n${placeholder}\nAfter`,
+        truncated: true,
+        unknown_block_ids: [unknownBlockId],
+      };
+    }
+    throw new APIResponseError({
+      code: APIErrorCode.ObjectNotFound,
+      status: 404,
+      message: "Could not find page.",
+      headers: new Headers(),
+      rawBodyText: "",
+      additional_data: undefined,
+      request_id: undefined,
+    });
+  };
+  const unresolved: string[] = [];
+
+  const pages = await collectPages(notion, rootId, {
+    onUnknownBlockUnresolved: (blockId) => unresolved.push(blockId),
+  });
+
+  assert.equal(pages[0].markdown, `Before\n${placeholder}\nAfter`);
+  assert.deepEqual(unresolved, [unknownBlockId]);
+});
+
 test("renders page aliases outside the current root without traversing them", async () => {
   const notion = createNotionMock();
   const placeholder = `<unknown url="https://app.notion.com/p/${rootId}#${unknownBlockId}" alt="alias"/>`;

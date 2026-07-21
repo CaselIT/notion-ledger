@@ -184,7 +184,19 @@ async function retrieveCompleteMarkdown(
         onProgress,
         onUnknownBlockUnresolved,
         ancestors,
-      );
+      ).catch((error: unknown) => {
+        if (
+          APIResponseError.isAPIResponseError(error)
+          && error.code === APIErrorCode.ObjectNotFound
+        ) {
+          onUnknownBlockUnresolved?.(normalizedBlockId);
+          return undefined;
+        }
+        throw error;
+      });
+      if (subtree === undefined) {
+        continue;
+      }
       markdown = replaceUnknownBlock(markdown, normalizedBlockId, subtree);
     }
     return markdown;
