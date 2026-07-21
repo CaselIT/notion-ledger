@@ -25,9 +25,9 @@
 
 - Generated files must stay inside the configured `output-dir`, which must not be the repository root.
 - Allocate one stable title-and-ID directory and one mirror index per root. Preserve `.mirror-roots.json` so root title changes retain existing directories.
-- Keep generated page content deterministic and avoid rewriting unchanged page files. Record `last_checked_at` only in the mirror index after each successful page check; do not add volatile timestamps to generated Markdown.
+- Keep generated page content and the mirror index deterministic, and avoid rewriting unchanged files. Do not record run timestamps or other volatile fields in generated Markdown or the mirror index, so an unchanged run produces no Git diff.
 - Preserve the `.mirror-index.json` mapping so title changes retain existing paths and Git history.
-- Persist each rendered page and its mirror-index entry before visiting the next page. Defer orphan deletion until traversal completes successfully so interrupted runs retain unseen indexed pages.
+- Write each rendered page file before visiting the next page, but persist the mirror index only after traversal completes. Defer orphan deletion to that same point so an interrupted run retains the previous index and every file it references.
 - Export inline database rows as indexed Markdown files and link their titles from the parent database list using planned stable paths.
 - Orphan cleanup may delete only validated files recorded in the mirror index. Never remove user-authored files or files outside `output-dir`.
 - Removing a root from `root-pages` must not automatically delete its directory or root-index entry.

@@ -35,14 +35,13 @@ function renderedPage(id: string, title: string, content = title): RenderedPage 
 async function mirror(
   outputDir: string,
   renderedPages: RenderedPage[],
-  options: { deleteOrphans?: boolean; now?: () => Date } = {},
+  options: { deleteOrphans?: boolean } = {},
 ): Promise<ReconcileResult> {
   const writer = await beginIncrementalMirror({
     outputDir,
     rootPageId,
     filenameStrategy: "slug-and-id",
     deleteOrphans: options.deleteOrphans ?? true,
-    now: options.now,
   });
   for (const rendered of renderedPages) {
     await writer.writePage(rendered);
@@ -56,33 +55,33 @@ async function temporaryDirectory(t: TestContext): Promise<string> {
   return directory;
 }
 
-test("persists each page and its check time before reconciliation finishes", async (t) => {
+test("writes page files eagerly but persists the index only on finish", async (t) => {
   const outputDir = await temporaryDirectory(t);
-  const checkedAt = new Date("2026-07-21T12:34:56.000Z");
   const writer = await beginIncrementalMirror({
     outputDir,
     rootPageId,
     filenameStrategy: "slug-and-id",
     deleteOrphans: true,
-    now: () => checkedAt,
   });
 
   await writer.writePage(renderedPage(rootPageId, "Root"));
+
+  const pagePath = path.join(outputDir, `root--${rootPageId.slice(0, 8)}.md`);
+  assert.equal(await fs.readFile(pagePath, "utf8"), "Root\n");
+  await assert.rejects(fs.access(path.join(outputDir, INDEX_FILENAME)));
+
+  assert.deepEqual(
+    await writer.finish(),
+    { pagesExported: 1, pagesChanged: 1, pagesDeleted: 0 },
+  );
 
   const index = JSON.parse(
     await fs.readFile(path.join(outputDir, INDEX_FILENAME), "utf8"),
   );
   const entry = index.pages[rootPageId];
   assert.equal(entry.last_edited_at, "2026-07-17T09:30:00.000Z");
-  assert.equal(entry.last_checked_at, checkedAt.toISOString());
-  assert.equal(
-    await fs.readFile(path.join(outputDir, entry.path), "utf8"),
-    "Root\n",
-  );
-  assert.deepEqual(
-    await writer.finish(),
-    { pagesExported: 1, pagesChanged: 1, pagesDeleted: 0 },
-  );
+  assert.equal(entry.path, `root--${rootPageId.slice(0, 8)}.md`);
+  assert.ok(!("last_checked_at" in entry));
 });
 
 test("preserves unseen indexed pages until reconciliation finishes", async (t) => {

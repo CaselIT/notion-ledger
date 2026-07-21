@@ -96,9 +96,9 @@ docs/notion/
     pricing-governance--12345678.md
 ```
 
-`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` from Notion plus the Action's `last_checked_at`. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
+`.mirror-roots.json` maps configured root page IDs to directories. Each root directory has its own `.mirror-index.json`, which maps full Notion page IDs to paths and records `last_edited_at` from Notion. Once allocated, root directories and page paths remain stable across title changes, preserving Git history and avoiding collisions between duplicate titles.
 
-Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are omitted from generated pages, so their contents do not change unless their rendered source data changes. The mirror index's `last_checked_at` intentionally advances whenever a page is checked.
+Each generated page includes safely serialized YAML metadata, a generated-file warning, a title, and converted Markdown. Volatile synchronization timestamps are omitted from both generated pages and the mirror index, so an unchanged run produces no Git diff.
 
 Pages are rendered and persisted as they are discovered rather than buffered until the complete tree has loaded. The mirror index is updated after each page write, making completed work durable during long runs. Indexed pages not encountered in the current run remain untouched until discovery finishes successfully; only then can orphan cleanup remove them.
 

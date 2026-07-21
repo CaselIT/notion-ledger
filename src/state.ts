@@ -12,7 +12,6 @@ interface MirrorIndexEntry {
   path: string;
   title: string;
   last_edited_at?: string;
-  last_checked_at?: string;
 }
 
 interface MirrorIndex {
@@ -36,7 +35,6 @@ interface IncrementalMirrorOptions {
   rootPageId: string;
   filenameStrategy: FilenameStrategy;
   deleteOrphans: boolean;
-  now?: () => Date;
 }
 
 export interface IncrementalMirrorWriter {
@@ -223,7 +221,6 @@ export async function beginIncrementalMirror({
   rootPageId,
   filenameStrategy,
   deleteOrphans,
-  now = () => new Date(),
 }: IncrementalMirrorOptions): Promise<IncrementalMirrorWriter> {
   await fs.mkdir(outputDir, { recursive: true });
   const index = await readIndex(outputDir, rootPageId);
@@ -248,14 +245,12 @@ export async function beginIncrementalMirror({
         path: pagePath,
         title: page.title,
         last_edited_at: page.lastEditedAt,
-        last_checked_at: now().toISOString(),
       };
       seen.add(page.id);
       pagesExported += 1;
       if (changed) {
         pagesChanged += 1;
       }
-      await writeIfChanged(path.join(outputDir, INDEX_FILENAME), serializeIndex(index));
       return changed;
     },
 
