@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { APIErrorCode, APIResponseError } from "@notionhq/client";
+import {
+  APIErrorCode,
+  APIResponseError,
+  RequestTimeoutError,
+} from "@notionhq/client";
 import {
   type DiscoveredPage,
   discoverPages,
   type DiscoverPagesOptions,
   findMarkdownReferences,
   queryInlineDatabaseRows,
+  withTimeoutRetries,
 } from "../src/notion";
 
 const rootId = "11111111111111111111111111111111";
@@ -566,4 +571,62 @@ test("retains editor IDs when Notion cannot find a user", async () => {
 
   assert.equal(pages[0].lastEditedBy, "editor");
   assert.equal(pages[1].lastEditedBy, "editor");
+});
+
+test("retries Notion request timeouts with bounded backoff", async () => {
+  const notion = createNotionMock();
+  let attempts = 0;
+  notion.pages.retrieveMarkdown = async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      throw new RequestTimeoutError();
+    }
+    return { markdown: "Recovered", truncated: false, unknown_block_ids: [] };
+  };
+  const warnings: string[] = [];
+  const retryingNotion = withTimeoutRetries(notion, {
+    initialRetryDelayMs: 0,
+    onRetry: (message) => warnings.push(message),
+  });
+
+  const response = await retryingNotion.pages.retrieveMarkdown({ page_id: rootId });
+
+  assert.equal(response.markdown, "Recovered");
+  assert.equal(attempts, 3);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /attempt 2\/3/);
+  assert.match(warnings[1], /attempt 3\/3/);
+});
+
+test("does not retry non-timeout Notion failures", async () => {
+  const notion = createNotionMock();
+  let attempts = 0;
+  const failure = new Error("request rejected");
+  notion.pages.retrieve = async () => {
+    attempts += 1;
+    throw failure;
+  };
+  const retryingNotion = withTimeoutRetries(notion, { initialRetryDelayMs: 0 });
+
+  await assert.rejects(
+    retryingNotion.pages.retrieve({ page_id: rootId }),
+    (error: unknown) => error === failure,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("stops retrying after the Notion timeout retry budget", async () => {
+  const notion = createNotionMock();
+  let attempts = 0;
+  notion.dataSources.query = async () => {
+    attempts += 1;
+    throw new RequestTimeoutError();
+  };
+  const retryingNotion = withTimeoutRetries(notion, { initialRetryDelayMs: 0 });
+
+  await assert.rejects(
+    retryingNotion.dataSources.query({ data_source_id: databaseId, page_size: 100 }),
+    RequestTimeoutError,
+  );
+  assert.equal(attempts, 3);
 });

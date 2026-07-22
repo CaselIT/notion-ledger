@@ -1,4 +1,8 @@
-import { APIErrorCode, APIResponseError } from "@notionhq/client";
+import {
+  APIErrorCode,
+  APIResponseError,
+  RequestTimeoutError,
+} from "@notionhq/client";
 import { normalizePageId } from "./inputs";
 
 // Notion enhanced Markdown embeds page/block IDs as either a 32-character
@@ -51,6 +55,78 @@ export interface NotionClient {
   };
   users: {
     retrieve: (parameters: { user_id: string }) => Promise<unknown>;
+  };
+}
+
+export interface NotionTimeoutRetryOptions {
+  maxRetries?: number;
+  initialRetryDelayMs?: number;
+  onRetry?: (message: string) => void;
+}
+
+export function withTimeoutRetries(
+  notion: NotionClient,
+  {
+    maxRetries = 2,
+    initialRetryDelayMs = 1_000,
+    onRetry,
+  }: NotionTimeoutRetryOptions = {},
+): NotionClient {
+  async function retry<T>(operation: string, request: () => Promise<T>): Promise<T> {
+    let retries = 0;
+    while (true) {
+      try {
+        return await request();
+      } catch (error: unknown) {
+        if (!RequestTimeoutError.isRequestTimeoutError(error) || retries >= maxRetries) {
+          throw error;
+        }
+        const delayMs = initialRetryDelayMs * (2 ** retries);
+        onRetry?.(
+          `Notion ${operation} timed out; retrying in ${delayMs}ms `
+          + `(attempt ${retries + 2}/${maxRetries + 1}).`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        retries += 1;
+      }
+    }
+  }
+
+  return {
+    blocks: {
+      retrieve: (parameters) => retry(
+        "block retrieval",
+        () => notion.blocks.retrieve(parameters),
+      ),
+    },
+    pages: {
+      retrieve: (parameters) => retry(
+        "page retrieval",
+        () => notion.pages.retrieve(parameters),
+      ),
+      retrieveMarkdown: (parameters) => retry(
+        "Markdown retrieval",
+        () => notion.pages.retrieveMarkdown(parameters),
+      ),
+    },
+    databases: {
+      retrieve: (parameters) => retry(
+        "database retrieval",
+        () => notion.databases.retrieve(parameters),
+      ),
+    },
+    dataSources: {
+      query: (parameters) => retry(
+        "data source query",
+        () => notion.dataSources.query(parameters),
+      ),
+    },
+    users: {
+      retrieve: (parameters) => retry(
+        "user retrieval",
+        () => notion.users.retrieve(parameters),
+      ),
+    },
   };
 }
 

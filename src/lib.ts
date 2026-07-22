@@ -1,7 +1,7 @@
 import path from "node:path";
 import { Client } from "@notionhq/client";
 import type { FilenameStrategy } from "./inputs";
-import { discoverPages } from "./notion";
+import { discoverPages, withTimeoutRetries } from "./notion";
 import { renderPage } from "./render";
 import {
   beginIncrementalMirror,
@@ -42,7 +42,10 @@ export async function runMirror(options: MirrorOptions): Promise<MirrorResult> {
     filenameStrategy,
     logger,
   } = options;
-  const notion = new Client({ auth: notionToken });
+  const notion = withTimeoutRetries(
+    new Client({ auth: notionToken }),
+    { onRetry: logger.warn },
+  );
 
   let pagesExported = 0;
   let pagesChanged = 0;
