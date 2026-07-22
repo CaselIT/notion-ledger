@@ -95,9 +95,9 @@ steps:
     fetchDepth: 1
     persistCredentials: true
 
-  - task: NodeTool@0
+  - task: UseNode@1
     inputs:
-      versionSpec: "24.x"
+      version: "24.x"
 
   - task: DownloadGitHubRelease@0
     inputs:
