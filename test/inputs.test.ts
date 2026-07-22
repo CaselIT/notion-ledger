@@ -35,7 +35,7 @@ test("keeps output directories inside the workspace", () => {
   );
   assert.throws(
     () => resolveOutputDirectory(workspace, "../outside"),
-    /inside the GitHub workspace/,
+    /inside the workspace/,
   );
   assert.throws(
     () => resolveOutputDirectory(workspace, path.resolve(workspace, "absolute")),
@@ -43,6 +43,6 @@ test("keeps output directories inside the workspace", () => {
   );
   assert.throws(
     () => resolveOutputDirectory(workspace, "."),
-    /must not be the GitHub workspace root/,
+    /must not be the workspace root/,
   );
 });

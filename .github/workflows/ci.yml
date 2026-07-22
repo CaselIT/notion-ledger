@@ -19,7 +19,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "lts/*"
+          node-version: "24"
           cache: npm
 
       - name: Install dependencies
@@ -28,11 +28,11 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Build distribution bundles
+        run: npm run build
+
       - name: Run tests
         run: npm test
-
-      - name: Build Action bundle
-        run: npm run build
 
       - name: Verify committed bundle is current
         shell: bash

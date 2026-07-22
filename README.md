@@ -1,20 +1,25 @@
 # Notion Ledger
 
-Notion Ledger is a Node.js 24 GitHub Action that mirrors selected Notion page trees or databases to deterministic Markdown files. Notion remains the source of truth; the Action never writes content back to Notion or commits repository changes itself.
+Notion Ledger is a Node.js 24 exporter for GitHub Actions, Azure Pipelines, and local command-line use. It mirrors selected Notion page trees or databases to deterministic Markdown files. Notion remains the source of truth; the exporter never writes content back to Notion or commits repository changes itself.
 
 ## Setup
 
 1. Create a Notion internal integration with the **Read content** capability. Enable **User information without email addresses** if generated front matter should include the last editor's name; otherwise `last_edited_by` records the stable Notion user ID.
 2. Connect the integration to a dedicated top-level page containing the documentation to mirror. Creating an integration alone does not grant access to any pages.
-3. Store the integration secret as a repository Actions secret named `NOTION_TOKEN`.
-4. Store the selected root page or database URLs or IDs in a newline-delimited repository variable such as `NOTION_MIRROR_ROOT_PAGES`.
+3. Store the integration secret in the secret manager for the selected runtime. The examples below use `NOTION_TOKEN`.
+4. Store the selected root page or database URLs or IDs in a newline-delimited variable such as `NOTION_MIRROR_ROOT_PAGES`.
 5. Use a private target repository and protect its default branch as appropriate for the designated mirror bot.
 
 Each configured root page, descendant `<page>` references returned by Notion's enhanced Markdown, and rows of inline databases referenced in that tree are exported. A configured root database acts as a container: every row page across all of its data sources is exported, followed by descendants referenced from those pages. The database itself does not produce a synthetic Markdown file. Other pages and databases accessible to the integration are not searched or exported.
 
-## Workflow
+## Usage
 
-Pin both checkout and this Action to immutable commit SHAs in production. The consuming workflow owns staging, committing, and pushing the generated files.
+The exporter only writes files. The consuming workflow or user owns staging, committing, and pushing generated changes.
+
+<details>
+<summary>GitHub Actions</summary>
+
+Pin both checkout and this Action to immutable commit SHAs in production.
 
 ```yaml
 name: Mirror Notion documentation
@@ -63,19 +68,116 @@ jobs:
 
 Staging with `git add --all` before `git diff --cached --quiet` is required so newly created and deleted files are detected.
 
+For detailed progress, create an `ACTIONS_STEP_DEBUG` secret with the value `true` and rerun the workflow. Debug logs never include the integration token.
+
+</details>
+
+<details>
+<summary>Azure Pipelines</summary>
+
+The CLI bundle can run from Azure Pipelines without copying this repository's source into the consuming repository. Publish `dist/cli.cjs` and `dist/lib.cjs` as assets on a versioned GitHub Release, then download both assets from that immutable release in the pipeline. The two files must remain in the same directory.
+
+```yaml
+trigger: none
+pr: none
+
+schedules:
+  # Azure evaluates cron schedules in UTC. Adjust as needed.
+  - cron: "29,59 7-16 * * 1-5"
+    displayName: Mirror Notion during the European workday
+    branches:
+      include:
+        - main
+    always: true
+
+steps:
+  - checkout: self
+
+  - task: NodeTool@0
+    inputs:
+      versionSpec: "24.x"
+
+  - task: DownloadGitHubRelease@0
+    inputs:
+      connection: github-service-connection
+      userRepository: CaselIT/notion-ledger
+      defaultVersionType: specificTag
+      version: v1.0.0
+      itemPattern: "*.cjs"
+      downloadPath: $(Pipeline.Workspace)/notion-ledger-cli
+
+  - script: node "$(Pipeline.Workspace)/notion-ledger-cli/cli.cjs"
+    name: notionMirror
+    displayName: Export Notion documentation
+    env:
+      NOTION_TOKEN: $(NOTION_TOKEN)
+      ROOT_PAGES: $(NOTION_MIRROR_ROOT_PAGES)
+      OUTPUT_DIR: docs/notion
+      ADD_FRONTMATTER: "true"
+      DELETE_ORPHANS: "true"
+      FULL_EXPORT: "false"
+      FILENAME_STRATEGY: slug-and-id
+```
+
+The schedule mirrors the GitHub example and still allows manual runs. `always: true` is required so Azure runs the mirror when Notion may have changed but the repository has not. Azure evaluates YAML cron expressions in UTC; adjust the expression and branch filter as needed. Schedules configured in the Azure Pipelines UI override YAML schedules and should be removed when using this example.
+
+Use a secret pipeline variable for `NOTION_TOKEN` and a GitHub service connection authorized to read the release. If organization policy prevents GitHub release downloads, publish the same two files as an Azure Artifacts universal package instead; the CLI contract is unchanged. The consuming pipeline remains responsible for staging, committing, and pushing generated changes.
+
+The CLI recognizes Azure Pipelines through `TF_BUILD`. It uses Azure debug, warning, and error log records and exposes `pages-exported`, `pages-changed`, and `pages-deleted` as output variables on the named script step. Set the standard `system.debug` pipeline variable to `true` for detailed traversal logs.
+
+</details>
+
+<details>
+<summary>Local CLI</summary>
+
+Install dependencies with `npm ci`, keep the token in an existing environment variable, and use an isolated output directory while testing. The local script invokes the same CLI entrypoint used by Azure Pipelines.
+
+PowerShell:
+
+```powershell
+$env:NOTION_TOKEN = 'your-notion-token'
+$env:ROOT_PAGES = $env:NOTION_MIRROR_ROOT_PAGES
+$env:OUTPUT_DIR = 'docs/notion-local-test'
+$env:ADD_FRONTMATTER = 'true'
+$env:DELETE_ORPHANS = 'false'
+$env:FULL_EXPORT = 'false'
+$env:NOTION_LEDGER_DEBUG = 'true'
+
+npm run mirror:local
+```
+
+Bash-like shell:
+
+```sh
+NOTION_TOKEN='your-notion-token' \
+ROOT_PAGES="$NOTION_MIRROR_ROOT_PAGES" \
+OUTPUT_DIR='docs/notion-local-test' \
+ADD_FRONTMATTER='true' \
+DELETE_ORPHANS='false' \
+FULL_EXPORT='false' \
+NOTION_LEDGER_DEBUG='true' \
+npm run mirror:local
+```
+
+Replace the token placeholder at runtime, preferably from a local secret manager, and set newline-delimited `NOTION_MIRROR_ROOT_PAGES` before running the command. Do not commit either value. Enable orphan deletion only when testing in an isolated output directory.
+
+</details>
+
 ## Inputs
 
-| Input | Required | Default | Description |
-| --- | --- | --- | --- |
-| `notion-token` | Yes | | Notion internal integration token. Read it from an Actions secret. |
-| `root-pages` | Yes | | Newline-delimited Notion root page or database URLs or 32-character IDs. Duplicate IDs are ignored. |
-| `output-dir` | No | `docs/notion` | Repository-relative output directory. The repository root and paths outside the workspace are rejected. |
-| `add-frontmatter` | No | `true` | Include YAML source metadata in each Markdown file. |
-| `delete-orphans` | No | `true` | Delete indexed mirror files for pages no longer found below the root. |
-| `full-export` | No | `false` | Re-export every page instead of reusing files whose indexed Notion edit timestamp is unchanged. |
-| `filename-strategy` | No | `slug-and-id` | Initial path strategy: `stable-id`, `slug-and-id`, or `title`. |
+| GitHub Action input | CLI environment variable | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `notion-token` | `NOTION_TOKEN` | Yes | | Notion internal integration token. Read it from a secret. |
+| `root-pages` | `ROOT_PAGES` | Yes | | Newline-delimited Notion root page or database URLs or 32-character IDs. Duplicate IDs are ignored. |
+| `output-dir` | `OUTPUT_DIR` | No | `docs/notion` | Repository-relative output directory. The repository root and paths outside the workspace are rejected. |
+| `add-frontmatter` | `ADD_FRONTMATTER` | No | `true` | Include YAML source metadata in each Markdown file. |
+| `delete-orphans` | `DELETE_ORPHANS` | No | `true` | Delete indexed mirror files for pages no longer found below the root. |
+| `full-export` | `FULL_EXPORT` | No | `false` | Re-export every page instead of reusing files whose indexed Notion edit timestamp is unchanged. |
+| `filename-strategy` | `FILENAME_STRATEGY` | No | `slug-and-id` | Initial path strategy: `stable-id`, `slug-and-id`, or `title`. |
 
 Boolean inputs accept only `true` or `false` (case-insensitive).
+
+The CLI resolves relative output paths from `BUILD_SOURCESDIRECTORY` when Azure Pipelines provides it, and from the current working directory otherwise. Set `NOTION_LEDGER_DEBUG=true` outside Azure Pipelines to enable detailed traversal logs.
 
 ## Outputs
 
@@ -124,48 +226,11 @@ Before broad adoption, run the Action against a representative Notion tree conta
 
 ## Development
 
-Dependencies are pinned in `package-lock.json`. The checked-in `dist/index.cjs` bundle is the Action entry point and must be rebuilt whenever source changes.
+Dependencies are pinned in `package-lock.json`. The checked-in `dist/action.cjs` bundle is the GitHub Action entry point, `dist/cli.cjs` is the CLI and Azure Pipelines entry point, and both load the shared exporter from `dist/lib.cjs`. All three artifacts must be rebuilt whenever source changes.
 
 ```bash
 npm ci
 npm run typecheck
-npm test
 npm run build
+npm test
 ```
-
-### Local Mirror
-
-`npm run mirror:local` performs a live export against Notion. It uses the same Action input environment variables as GitHub Actions, so keep the token in an existing local environment variable and use a separate output directory while testing.
-
-For detailed progress, the Action uses the standard `@actions/core` debug channel. In GitHub Actions, create an `ACTIONS_STEP_DEBUG` secret with the value `true` and rerun the workflow to show page retrieval and inline database query logs. For local runs, set `RUNNER_DEBUG=1` to enable the equivalent runner debug mode. Debug logs never include the integration token.
-
-On windows in powershell:
-```powershell
-[Environment]::SetEnvironmentVariable('INPUT_NOTION-TOKEN', $env:NOTION_TOKEN, 'Process')
-[Environment]::SetEnvironmentVariable('INPUT_ROOT-PAGES', $env:NOTION_MIRROR_ROOT_PAGES, 'Process')
-[Environment]::SetEnvironmentVariable('INPUT_OUTPUT-DIR', 'docs/notion-local-test', 'Process')
-[Environment]::SetEnvironmentVariable('INPUT_ADD-FRONTMATTER', 'true', 'Process')
-[Environment]::SetEnvironmentVariable('INPUT_DELETE-ORPHANS', 'false', 'Process')
-[Environment]::SetEnvironmentVariable('INPUT_FULL-EXPORT', 'false', 'Process')
-$env:RUNNER_DEBUG = '1'
-$env:GITHUB_WORKSPACE = (Get-Location).Path
-
-npm run mirror:local
-```
-
-On a bash-like shell:
-```sh
-export GITHUB_WORKSPACE="$PWD"
-
-env \
-  'RUNNER_DEBUG'='1' \
-  'INPUT_NOTION-TOKEN'="$NOTION_TOKEN" \
-  'INPUT_ROOT-PAGES'="$NOTION_MIRROR_ROOT_PAGES" \
-  'INPUT_OUTPUT-DIR'='docs/notion-local-test' \
-  'INPUT_ADD-FRONTMATTER'='true' \
-  'INPUT_DELETE-ORPHANS'='false' \
-  'INPUT_FULL-EXPORT'='false' \
-  npm run mirror:local
-```
-
-Set `NOTION_TOKEN` and newline-delimited `NOTION_MIRROR_ROOT_PAGES` in your shell or a local secret manager before running this command. Do not commit either value. After inspecting the generated output and mirror indexes, enable orphan deletion only when testing in an isolated output directory.

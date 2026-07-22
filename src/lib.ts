@@ -1,12 +1,6 @@
 import path from "node:path";
-import * as core from "@actions/core";
 import { Client } from "@notionhq/client";
-import {
-  parseBoolean,
-  parseFilenameStrategy,
-  parseRootPageIds,
-  resolveOutputDirectory,
-} from "./inputs";
+import type { FilenameStrategy } from "./inputs";
 import { discoverPages } from "./notion";
 import { renderPage } from "./render";
 import {
@@ -15,42 +9,39 @@ import {
   planRootPaths,
 } from "./state";
 
-type LogLevel = "debug" | "info" | "warn";
+export type LogLevel = "debug" | "info" | "warn";
 
-const actionLoggers: Record<LogLevel, (message: string) => void> = {
-  debug: core.debug,
-  info: core.info,
-  warn: core.warning,
-};
+export type MirrorLogger = Record<LogLevel, (message: string) => void>;
 
-function log(level: LogLevel, message: string): void {
-  actionLoggers[level](message);
+export interface MirrorOptions {
+  notionToken: string;
+  rootPageIds: string[];
+  outputDir: string;
+  addFrontmatter: boolean;
+  deleteOrphans: boolean;
+  fullExport: boolean;
+  filenameStrategy: FilenameStrategy;
+  logger: MirrorLogger;
 }
 
-export async function run(): Promise<void> {
-  const notionToken = core.getInput("notion-token", { required: true });
-  const rootPageIds = parseRootPageIds(core.getInput("root-pages", { required: true }));
-  const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-  const outputDir = resolveOutputDirectory(
-    workspace,
-    core.getInput("output-dir") || "docs/notion",
-  );
-  const addFrontmatter = parseBoolean(
-    core.getInput("add-frontmatter") || "true",
-    "add-frontmatter",
-  );
-  const deleteOrphans = parseBoolean(
-    core.getInput("delete-orphans") || "true",
-    "delete-orphans",
-  );
-  const fullExport = parseBoolean(
-    core.getInput("full-export") || "false",
-    "full-export",
-  );
-  const filenameStrategy = parseFilenameStrategy(
-    core.getInput("filename-strategy") || "slug-and-id",
-  );
+export interface MirrorResult {
+  rootsMirrored: number;
+  pagesExported: number;
+  pagesChanged: number;
+  pagesDeleted: number;
+}
 
+export async function runMirror(options: MirrorOptions): Promise<MirrorResult> {
+  const {
+    notionToken,
+    rootPageIds,
+    outputDir,
+    addFrontmatter,
+    deleteOrphans,
+    fullExport,
+    filenameStrategy,
+    logger,
+  } = options;
   const notion = new Client({ auth: notionToken });
 
   let pagesExported = 0;
@@ -66,7 +57,7 @@ export async function run(): Promise<void> {
     try {
       await activeWriter?.persist();
     } catch (error: unknown) {
-      log("warn",
+      logger.warn(
         `Could not save mirror index progress: ${
           error instanceof Error ? error.message : String(error)
         }`,
@@ -81,7 +72,7 @@ export async function run(): Promise<void> {
     }
     interrupted = true;
     void (async () => {
-      log("warn", `Received ${signal}; saving mirror index progress before exiting.`);
+      logger.warn(`Received ${signal}; saving mirror index progress before exiting.`);
       await saveProgress();
       process.exit(130);
     })();
@@ -91,7 +82,7 @@ export async function run(): Promise<void> {
 
   try {
     for (const rootPageId of rootPageIds) {
-      log("info", `Discovering pages below Notion root ${rootPageId}.`);
+      logger.info(`Discovering pages below Notion root ${rootPageId}.`);
       let writer: IncrementalMirrorWriter | undefined;
       const ensureWriter = async (page: Parameters<IncrementalMirrorWriter["reusePage"]>[0]) => {
         if (writer) {
@@ -111,7 +102,7 @@ export async function run(): Promise<void> {
         return writer;
       };
       await discoverPages(notion, rootPageId, {
-        onProgress: (message) => log("debug", message),
+        onProgress: logger.debug,
         onRoot: async (root) => {
           await ensureWriter(root);
         },
@@ -130,7 +121,7 @@ export async function run(): Promise<void> {
         onUnknownBlockUnresolved: (blockId) => {
           if (!warnedUnknownBlocks.has(blockId)) {
             warnedUnknownBlocks.add(blockId);
-            log("warn",
+            logger.warn(
               `Notion could not resolve Markdown block ${blockId}; `
               + "preserving its <unknown> placeholder.",
             );
@@ -139,7 +130,7 @@ export async function run(): Promise<void> {
         onUserInfoUnavailable: () => {
           if (!warnedAboutUserInfo) {
             warnedAboutUserInfo = true;
-            log("warn",
+            logger.warn(
               "Using Notion editor IDs for last_edited_by because the integration does not have "
               + "User information without email addresses capability.",
             );
@@ -165,26 +156,15 @@ export async function run(): Promise<void> {
     process.removeListener("SIGTERM", handleSignal);
   }
 
-  core.setOutput("pages-exported", pagesExported);
-  core.setOutput("pages-changed", pagesChanged);
-  core.setOutput("pages-deleted", pagesDeleted);
-  log("info",
+  const result = {
+    rootsMirrored: rootPageIds.length,
+    pagesExported,
+    pagesChanged,
+    pagesDeleted,
+  };
+  logger.info(
     `Exported ${pagesExported} page(s) from ${rootPageIds.length} root(s); `
     + `changed ${pagesChanged}; deleted ${pagesDeleted}.`,
   );
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    await core.summary
-      .addHeading("Notion mirror")
-      .addTable([
-        [{ data: "Roots mirrored", header: true }, String(rootPageIds.length)],
-        [{ data: "Pages exported", header: true }, String(pagesExported)],
-        [{ data: "Pages changed", header: true }, String(pagesChanged)],
-        [{ data: "Pages deleted", header: true }, String(pagesDeleted)],
-      ])
-      .write();
-  }
+  return result;
 }
-
-run().catch((error: unknown) => {
-  core.setFailed(error instanceof Error ? error.message : String(error));
-});

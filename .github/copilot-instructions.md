@@ -3,22 +3,23 @@
 ## Product Contract
 
 - Treat this file as the durable engineering contract and `README.md` as the current user-facing contract.
-- This is a one-way, read-only Notion-to-GitHub Markdown mirror. Never write repository content back to Notion.
+- This is a one-way, read-only Notion-to-repository Markdown mirror. Never write repository content back to Notion.
 - Use only the official Notion API with an internal integration token. Never use browser cookies, undocumented APIs, or log the token.
 - Scope discovery to configured root pages or databases, descendant `<page>` references returned by enhanced Markdown, rows returned by inline databases referenced in page trees, and rows returned by every data source of a configured root database. A root database is a traversal container and does not produce a synthetic Markdown file. Render page aliases as titled references marked outside the current root, but do not traverse their targets. Do not search or export every page or database accessible to the integration.
 - Optimize for readable, auditable Git diffs and stable history rather than lossless round-trip fidelity.
 
-## Action Contract
+## Runtime Contract
 
-- Run as a bundled Node.js 24 JavaScript Action. The Action exports files; it does not commit or push them.
+- Maintain one platform-neutral core with three checked-in CommonJS distribution artifacts: shared `dist/lib.cjs`, executable `dist/action.cjs` for GitHub Actions, and executable `dist/cli.cjs` for Azure Pipelines and local use. Treat `lib.cjs` as an internal runtime dependency of the executable artifacts rather than a documented public API. The exporter writes files; it does not commit or push them.
+- Keep GitHub and CLI concerns in thin adapters around the shared core. Azure Pipelines is detected and supported by the CLI adapter rather than a separate exporter implementation.
 - Inputs:
-	- `notion-token` (required): internal integration token, supplied from an Actions secret.
-	- `root-pages` (required): newline-delimited Notion root page or database URLs or IDs.
-	- `output-dir` (default `docs/notion`): repository-relative generated-file directory.
-	- `add-frontmatter` (default `true`): include generated Notion metadata.
-	- `delete-orphans` (default `true`): remove indexed pages no longer below each configured root.
-	- `full-export` (default `false`): re-export every page regardless of its indexed Notion edit timestamp.
-	- `filename-strategy` (default `slug-and-id`): `stable-id`, `slug-and-id`, or `title`.
+	- `notion-token` / `NOTION_TOKEN` (required): internal integration token, supplied from a secret.
+	- `root-pages` / `ROOT_PAGES` (required): newline-delimited Notion root page or database URLs or IDs.
+	- `output-dir` / `OUTPUT_DIR` (default `docs/notion`): repository-relative generated-file directory.
+	- `add-frontmatter` / `ADD_FRONTMATTER` (default `true`): include generated Notion metadata.
+	- `delete-orphans` / `DELETE_ORPHANS` (default `true`): remove indexed pages no longer below each configured root.
+	- `full-export` / `FULL_EXPORT` (default `false`): re-export every page regardless of its indexed Notion edit timestamp.
+	- `filename-strategy` / `FILENAME_STRATEGY` (default `slug-and-id`): `stable-id`, `slug-and-id`, or `title`.
 - Outputs: `pages-exported`, `pages-changed`, and `pages-deleted`.
 - The default initial filename is `slug(title)--short-page-id.md`. Once indexed, preserve that path across title changes regardless of filename strategy.
 
@@ -60,7 +61,10 @@
 - `src/render.ts`: YAML front matter and generated page layout.
 - `src/paths.ts`: filename strategies, collision handling, and indexed path safety.
 - `src/state.ts`: deterministic writes, root/page index persistence, and orphan reconciliation.
-- `src/index.ts`: Action orchestration, logs, outputs, and job summary.
+- `src/lib.ts`: platform-neutral export orchestration, progress persistence, and results.
+- `src/action.ts`: GitHub Action inputs, logs, outputs, and job summary.
+- `src/cli.ts`: CLI inputs and local/Azure Pipelines logs and outputs.
+- `src/action-entrypoint.ts` and `src/cli-entrypoint.ts`: minimal side-effectful executable entrypoints. Keep adapter modules import-safe for focused tests.
 
 Keep changes in the module that owns the behavior. Prefer small extensions of these boundaries over new abstractions.
 
@@ -69,8 +73,9 @@ Keep changes in the module that owns the behavior. Prefer small extensions of th
 - Use Node.js 24+ and the pinned dependencies in `package-lock.json`.
 - Prefer the scripts in `package.json` through `npm` over invoking `node_modules/.bin` or underlying tools directly. Use `npm run test:file -- test/example.test.ts` for a single test file. Use a direct invocation only when no suitable package script exists; native `node --test` cannot resolve this repository's extensionless TypeScript imports.
 - Add focused regression tests for behavior changes, especially traversal, conversion output, path safety, rename stability, no-op runs, and orphan deletion.
-- Run `npm run typecheck` and `npm test` after source or test changes.
-- Run `npm run build` after any `src/**` change. GitHub Actions executes the checked-in `dist/index.cjs`; consumers do not install dependencies at runtime.
+- Adapter regression tests execute the built `dist/action.cjs` and `dist/cli.cjs` against a fake adjacent `lib.cjs`, without contacting Notion. Build before running them whenever source changes could affect an adapter or its shared-library import contract.
+- After source changes, run `npm run typecheck`, `npm run build`, and then `npm test`, in that order. After test-only changes, run `npm run typecheck` and `npm test`.
+- GitHub Actions executes the checked-in `dist/action.cjs`; CLI and Azure Pipelines consumers execute `dist/cli.cjs`. Both entrypoints require the adjacent checked-in `dist/lib.cjs`, and consumers do not install dependencies at runtime.
 - Do not claim live Notion validation unless it was actually run with a representative Notion tree containing the block types listed above. Distinguish mocked converter/API tests from live integration results.
 
 Before calling a release ready, verify that nested pages export, inline database rows link to their exported content, new children appear automatically, a one-sentence edit changes only its page, a no-op run produces no Git changes, nested tasks are valid GFM, unusual and duplicate titles are safe, rename paths remain stable, orphan policy works, and no secret appears in logs.

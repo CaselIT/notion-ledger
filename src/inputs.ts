@@ -59,17 +59,17 @@ export function resolveOutputDirectory(workspace: string, outputDir: string): st
     throw new Error("output-dir cannot be empty.");
   }
   if (path.isAbsolute(value)) {
-    throw new Error("output-dir must be relative to the GitHub workspace.");
+    throw new Error("output-dir must be relative to the workspace.");
   }
 
   const workspacePath = path.resolve(workspace);
   const resolved = path.resolve(workspacePath, value);
   const relative = path.relative(workspacePath, resolved);
   if (!relative) {
-    throw new Error("output-dir must not be the GitHub workspace root.");
+    throw new Error("output-dir must not be the workspace root.");
   }
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error("output-dir must stay inside the GitHub workspace.");
+    throw new Error("output-dir must stay inside the workspace.");
   }
   return resolved;
 }

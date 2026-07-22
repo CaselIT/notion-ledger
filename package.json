@@ -2,10 +2,10 @@
   "name": "notion-ledger",
   "version": "1.0.0",
   "description": "A versioned Markdown mirror for Notion.",
-  "main": "dist/index.cjs",
+  "main": "dist/lib.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "mirror:local": "tsx src/index.ts",
+    "mirror:local": "node dist/cli.cjs",
     "test": "tsx --test test/*.test.ts",
     "test:file": "tsx --test",
     "typecheck": "tsc --noEmit"
