@@ -40,7 +40,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@12cd2235efa0937479335606d7c3ac9f6c0973b1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Export Notion documentation
         uses: CaselIT/notion-ledger@<PINNED_COMMIT_SHA>
@@ -92,6 +92,8 @@ schedules:
 
 steps:
   - checkout: self
+    fetchDepth: 1
+    persistCredentials: true
 
   - task: NodeTool@0
     inputs:
@@ -117,11 +119,26 @@ steps:
       DELETE_ORPHANS: "true"
       FULL_EXPORT: "false"
       FILENAME_STRATEGY: slug-and-id
+
+  - bash: |
+      git add --all
+      if git diff --cached --quiet; then
+        echo "No Notion content changes found."
+        exit 0
+      fi
+
+      git config user.name "notion-sync-bot"
+      git config user.email "notion-sync-bot@users.noreply.github.com"
+      git commit -m "docs: mirror Notion knowledge base"
+      git push origin HEAD:"$(Build.SourceBranch)"
+    displayName: Commit documentation updates
 ```
 
 The schedule mirrors the GitHub example and still allows manual runs. `always: true` is required so Azure runs the mirror when Notion may have changed but the repository has not. Azure evaluates YAML cron expressions in UTC; adjust the expression and branch filter as needed. Schedules configured in the Azure Pipelines UI override YAML schedules and should be removed when using this example.
 
-Use a secret pipeline variable for `NOTION_TOKEN` and a GitHub service connection authorized to read the release. If organization policy prevents GitHub release downloads, publish the same two files as an Azure Artifacts universal package instead; the CLI contract is unchanged. The consuming pipeline remains responsible for staging, committing, and pushing generated changes.
+Use a secret pipeline variable for `NOTION_TOKEN` and a GitHub service connection authorized to read the release. If organization policy prevents GitHub release downloads, publish the same two files as an Azure Artifacts universal package instead; the CLI contract is unchanged.
+
+The checkout retains credentials so the final script can push back to the branch that triggered the pipeline. For Azure Repos, grant **Contribute** permission to the project's Build Service identity. For a GitHub source repository, authorize the pipeline's source service connection to write repository contents. Branch policies or protections must also permit the designated mirror identity to update the branch. As in the GitHub example, `git add --all` ensures new and deleted mirror files are included.
 
 The CLI recognizes Azure Pipelines through `TF_BUILD`. It uses Azure debug, warning, and error log records and exposes `pages-exported`, `pages-changed`, and `pages-deleted` as output variables on the named script step. Set the standard `system.debug` pipeline variable to `true` for detailed traversal logs.
 
